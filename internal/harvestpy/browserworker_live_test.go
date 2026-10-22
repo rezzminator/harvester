@@ -88,6 +88,8 @@ func TestLiveBrowserWorkerFetch(t *testing.T) {
 	defer func() { _ = worker.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 90_000_000_000)
 	defer cancel()
+	// This opt-in live test needs the real resolver refused by TestMain.
+	t.Cleanup(harvest.StubPublicResolverForTest(nil))
 	smoke, err := worker.Smoke(ctx)
 	if err != nil {
 		t.Fatalf("live smoke failed: %v", err)
