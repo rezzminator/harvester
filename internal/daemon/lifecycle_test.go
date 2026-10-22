@@ -70,7 +70,7 @@ func daemonFixture(t *testing.T) config.Runtime {
 	}
 	runtime.Version = "test-v1"
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), drainTimeout+cleanupTimeout+time.Second)
 		defer cancel()
 		if err := Stop(ctx, runtime); err != nil {
 			t.Error(err)
@@ -163,8 +163,9 @@ func TestEnsureStartsDetachedRecoversAndDoesNotDowngradeOldProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	harness.write(t, `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
-	if _, ok := harness.read(t)["result"]; !ok {
-		t.Fatal("proxy did not recover killed daemon")
+	response := harness.read(t)
+	if _, ok := response["result"]; !ok {
+		t.Fatalf("proxy did not recover killed daemon: %+v", response)
 	}
 	recovered, err := Status(t.Context(), runtime)
 	if err != nil || recovered.PID == first.PID {
@@ -661,7 +662,9 @@ func TestConcurrentDrainDoesNotHideUnprovenFailures(t *testing.T) {
 			done := make(chan error, 1)
 			go func() { done <- server.Serve(listener) }()
 			defer func() { server.Close(); <-done; os.Remove(expected.Endpoint) }()
-			if err := joinDrain(t.Context(), runtime, expected); err == nil {
+			if err := joinDrain(t.Context(), runtime, expected, func(current config.Runtime) (string, error) {
+				return installedVersion(t.Context(), current)
+			}); err == nil {
 				t.Fatalf("%s was mistaken for confirmed concurrent drain", failure)
 			}
 		})

@@ -175,7 +175,29 @@ func ensure(ctx context.Context, runtime config.Runtime, refresh bool) (StatusIn
 	bounded, cancel := context.WithTimeout(ctx, window)
 	defer cancel()
 	started := false
-	expectedVersion, err := installedVersion(bounded, runtime)
+	var versionBinary, version string
+	var versionInfo os.FileInfo
+	// Poll trust and file identity during startup/drain without spawning a version process each time.
+	readVersion := func(current config.Runtime) (string, error) {
+		binary, err := executable(current)
+		if err != nil {
+			return "", err
+		}
+		info, err := os.Stat(binary)
+		if err != nil {
+			return "", err
+		}
+		if versionInfo != nil && binary == versionBinary && os.SameFile(info, versionInfo) && info.Size() == versionInfo.Size() && info.ModTime().Equal(versionInfo.ModTime()) {
+			return version, nil
+		}
+		version, err = installedVersion(bounded, current)
+		if err != nil {
+			return "", err
+		}
+		versionBinary, versionInfo = binary, info
+		return version, nil
+	}
+	expectedVersion, err := readVersion(runtime)
 	if err != nil {
 		return StatusInfo{}, fmt.Errorf("resolve current daemon build; see %s: %w", paths.DaemonLog(runtime.Paths.Home), err)
 	}
@@ -188,7 +210,7 @@ func ensure(ctx context.Context, runtime config.Runtime, refresh bool) (StatusIn
 		if err != nil {
 			return StatusInfo{}, err
 		}
-		expectedVersion, err = installedVersion(bounded, runtime)
+		expectedVersion, err = readVersion(runtime)
 		if err != nil {
 			return StatusInfo{}, err
 		}
@@ -212,7 +234,7 @@ func ensure(ctx context.Context, runtime config.Runtime, refresh bool) (StatusIn
 				if err != nil {
 					return StatusInfo{}, err
 				}
-				latestVersion, err := installedVersion(bounded, latest)
+				latestVersion, err := readVersion(latest)
 				if err != nil {
 					return StatusInfo{}, err
 				}
@@ -220,7 +242,7 @@ func ensure(ctx context.Context, runtime config.Runtime, refresh bool) (StatusIn
 					runtime = latest
 					continue
 				}
-				if err := joinDrain(bounded, runtime, status); err != nil {
+				if err := joinDrain(bounded, runtime, status, readVersion); err != nil {
 					return StatusInfo{}, err
 				}
 				refresh = false
@@ -355,7 +377,7 @@ func sameInstance(first, second StatusInfo) bool {
 	return first.PID == second.PID && first.Started.Equal(second.Started) && first.Version == second.Version && first.Endpoint == second.Endpoint && first.ConfigPath == second.ConfigPath && first.ConfigDigest == second.ConfigDigest
 }
 
-func joinDrain(ctx context.Context, runtime config.Runtime, expected StatusInfo) error {
+func joinDrain(ctx context.Context, runtime config.Runtime, expected StatusInfo, readVersion func(config.Runtime) (string, error)) error {
 	stopErr := requestStop(ctx, runtime, expected)
 	if stopErr == nil {
 		return nil
@@ -382,7 +404,7 @@ func joinDrain(ctx context.Context, runtime config.Runtime, expected StatusInfo)
 	if err != nil {
 		return errors.Join(stopErr, err)
 	}
-	version, err := installedVersion(ctx, latest)
+	version, err := readVersion(latest)
 	if err != nil {
 		return errors.Join(stopErr, err)
 	}

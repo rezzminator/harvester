@@ -107,9 +107,10 @@ the Unix socket `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/daemon.sock`
 services. Its singleton lock is
 `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/daemon.lock` (mode `0600`);
 the daemon log is `.../harvester/logs/daemon.log` (mode `0600`). A proxy starts
-it detached on demand; it remains running after clients exit. Before starting
-or reusing the daemon, a proxy checks the version of the currently installed
-binary; an older proxy accepts a newer daemon and never downgrades it.
+it detached on demand; it remains running after clients exit. It checks the
+installed binary's version once per session and again on a daemon reconnect; it
+also rechecks a binary replaced during startup. An older proxy accepts a newer
+daemon and never downgrades it.
 `harvester setup` refreshes the daemon after setup to apply current
 configuration. `harvester status [--json]` reports the daemon, and
 `harvester stop` drains and stops it.

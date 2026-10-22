@@ -38,11 +38,14 @@ type stdioProxy struct {
 	initialize, initialized   []byte
 	sessionID, protocol       string
 	sessionGeneration         uint64
+	daemonEnsured             bool
+	ensureGate                chan struct{}
 	handshakeMutex            sync.Mutex
 	sessionMutex              sync.RWMutex
 	reinitMutex, requestMutex sync.Mutex
 	requests, requestTails    map[string]*proxyRequestState
 	ensure                    func(context.Context) error
+	ready                     func(context.Context) bool
 }
 
 func Proxy(ctx context.Context, runtime config.Runtime, input io.Reader, output, warnings io.Writer) error {
@@ -50,14 +53,28 @@ func Proxy(ctx context.Context, runtime config.Runtime, input io.Reader, output,
 	proxy.endpoint = "http://localhost/mcp"
 	proxy.client = obs.WrapClient(unixClient(paths.DaemonSocket(runtime.Paths.Home)))
 	defer proxy.client.CloseIdleConnections()
+	var ensured StatusInfo
 	proxy.ensure = func(ctx context.Context) error {
-		_, err := Ensure(ctx, runtime)
+		status, err := Ensure(ctx, runtime)
 		if err != nil {
 			return fmt.Errorf("harvester daemon unavailable; see %s: %w", paths.DaemonLog(runtime.Paths.Home), err)
 		}
+		ensured = status
 		return nil
 	}
-	if err := proxy.ensure(ctx); err != nil {
+	proxy.ready = func(ctx context.Context) bool {
+		current, err := loadCurrent(runtime)
+		if err != nil {
+			return false
+		}
+		digest, err := identity(current)
+		if err != nil {
+			return false
+		}
+		status, err := Status(ctx, current)
+		return err == nil && sameInstance(status, ensured) && !status.Draining && status.CleanupError == "" && status.ConfigDigest == digest
+	}
+	if err := proxy.ensureDaemon(ctx); err != nil {
 		proxy.warn("startup failed: %v", err)
 		return err
 	}
@@ -73,6 +90,7 @@ type proxyFrame struct {
 type proxySession struct {
 	sessionID, protocol string
 	generation          uint64
+	ensured             bool
 }
 
 type proxyPostResult struct {
@@ -92,7 +110,7 @@ func newStdioProxy(_ context.Context, address string, warnings io.Writer) *stdio
 	if warnings == nil {
 		warnings = os.Stderr
 	}
-	return &stdioProxy{address: address, endpoint: "http://" + address + "/mcp", warnings: warnings, client: &http.Client{Transport: http.DefaultTransport}, clock: clock.Real, retryWindow: proxyRetryWindow, retryDelay: proxyRetryDelay, requests: make(map[string]*proxyRequestState), requestTails: make(map[string]*proxyRequestState)}
+	return &stdioProxy{address: address, endpoint: "http://" + address + "/mcp", warnings: warnings, client: &http.Client{Transport: http.DefaultTransport}, clock: clock.Real, retryWindow: proxyRetryWindow, retryDelay: proxyRetryDelay, ensureGate: make(chan struct{}, 1), requests: make(map[string]*proxyRequestState), requestTails: make(map[string]*proxyRequestState)}
 }
 func (proxy *stdioProxy) run(ctx context.Context, input io.Reader, output io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
@@ -297,11 +315,8 @@ func (proxy *stdioProxy) sendWithRetry(ctx context.Context, frame []byte, isHand
 	for attempt := 0; ; attempt++ {
 		var result proxyPostResult
 		var err error
-		if proxy.ensure != nil {
-			err = proxy.ensure(retryCtx)
-			if err != nil {
-				return nil, err
-			}
+		if err := proxy.ensureDaemon(retryCtx); err != nil {
+			return nil, err
 		}
 		if err == nil && !isHandshake {
 			if contextErr := ctx.Err(); contextErr != nil {
@@ -349,6 +364,45 @@ func (proxy *stdioProxy) sendWithRetry(ctx context.Context, frame []byte, isHand
 		case <-timer.C():
 		}
 	}
+}
+
+func (proxy *stdioProxy) ensureDaemon(ctx context.Context) error {
+	if proxy.ensure == nil {
+		return nil
+	}
+	if proxy.ready == nil {
+		return proxy.ensure(ctx)
+	}
+	select {
+	case proxy.ensureGate <- struct{}{}:
+		defer func() { <-proxy.ensureGate }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	session := proxy.session()
+	if session.ensured {
+		ready := proxy.ready(ctx)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if ready && proxy.session().ensured {
+			return nil
+		}
+		proxy.clearSession(session.generation)
+		session = proxy.session()
+	}
+	if err := proxy.ensure(ctx); err != nil {
+		return err
+	}
+	proxy.sessionMutex.Lock()
+	if proxy.sessionGeneration == session.generation {
+		proxy.daemonEnsured = true
+	}
+	proxy.sessionMutex.Unlock()
+	return nil
 }
 
 func (proxy *stdioProxy) uncertainDelivery(cause error) error {
@@ -527,7 +581,7 @@ func protocolFromResponse(response []byte) string {
 func (proxy *stdioProxy) session() proxySession {
 	proxy.sessionMutex.RLock()
 	defer proxy.sessionMutex.RUnlock()
-	return proxySession{sessionID: proxy.sessionID, protocol: proxy.protocol, generation: proxy.sessionGeneration}
+	return proxySession{sessionID: proxy.sessionID, protocol: proxy.protocol, generation: proxy.sessionGeneration, ensured: proxy.daemonEnsured}
 }
 
 func (proxy *stdioProxy) updateSession(generation uint64, sessionID, protocol string) {
@@ -562,6 +616,7 @@ func (proxy *stdioProxy) clearSession(generation uint64) {
 	}
 	proxy.sessionID = ""
 	proxy.protocol = ""
+	proxy.daemonEnsured = false
 	proxy.sessionGeneration++
 }
 
