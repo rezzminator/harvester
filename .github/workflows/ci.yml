@@ -1,0 +1,34 @@
+name: ci
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: format
+        run: |
+          unformatted=$(gofmt -l .)
+          test -z "$unformatted" || { printf '%s\n' "$unformatted"; exit 1; }
+      - name: build, vet and test
+        run: go build ./... && go vet ./... && go test ./...
+      - name: version and release assets
+        run: scripts/release-check.sh
+      - name: leak gate
+        env:
+          LEAK_TERMS_CONTENT: ${{ secrets.LEAK_TERMS }}
+        run: |
+          if test -n "$LEAK_TERMS_CONTENT"; then
+            printf '%s\n' "$LEAK_TERMS_CONTENT" > "$RUNNER_TEMP/leak-terms.txt"
+          else
+            printf '!structural-only\n' > "$RUNNER_TEMP/leak-terms.txt"
+          fi
+          mapfile -d '' -t sources < <(git ls-files -z)
+          LEAK_TERMS="$RUNNER_TEMP/leak-terms.txt" scripts/leak-check.sh --files "${sources[@]}"

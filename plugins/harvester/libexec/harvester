@@ -1,0 +1,70 @@
+#!/bin/sh
+# Resolve this plugin version and publish only a checksum-verified executable.
+set -eu
+fail() { printf 'harvester: binary unavailable: %s\n' "$*" >&2; exit 1; }
+plugin=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+version=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$plugin/.claude-plugin/plugin.json")
+case "$version" in ''|.|..|*[!0-9A-Za-z._+-]*) fail 'invalid plugin version';; esac
+root=${HARVESTER_HOME:-${HOME:?HOME is unset}/.local/share/harvester}
+case "$root" in /*) ;; *) fail 'HARVESTER_HOME must be absolute';; esac
+binary=$root/bin/$version/harvester
+link_binary() {
+  temporary=$root/bin/.harvester-link-$$
+  ln -s "$version/harvester" "$temporary" || fail 'cannot stage stable link'
+  mv -f "$temporary" "$root/bin/harvester" || { rm -f "$temporary"; fail 'cannot publish stable link'; }
+}
+if [ -f "$binary" ] && [ -x "$binary" ]; then
+  link_binary
+  exec "$binary" "$@"
+fi
+mkdir -p "$root/bin/$version" || fail 'cannot create binary home'
+chmod 700 "$root" "$root/bin" "$root/bin/$version" || fail 'cannot protect binary home'
+lock=$root/.install.lock
+held=
+staging=
+cleanup() {
+  [ -z "$staging" ] || rm -f "$staging"
+  if [ -n "$held" ]; then rm -f "$lock/pid"; rmdir "$lock"; fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+attempt=0
+while ! mkdir "$lock" 2>/dev/null; do
+  owner=$(cat "$lock/pid" 2>/dev/null || :)
+  case "$owner" in ''|*[!0-9]*) ;; *)
+    if ! kill -0 "$owner" 2>/dev/null; then
+      rm -f "$lock/pid"
+      rmdir "$lock" 2>/dev/null || :
+    fi;;
+  esac
+  attempt=$((attempt + 1))
+  [ "$attempt" -lt 60 ] || fail 'timed out waiting for binary install lock'
+  sleep 1
+done
+held=1
+printf '%s\n' "$$" > "$lock/pid" || fail 'cannot record install lock'
+if [ ! -f "$binary" ] || [ ! -x "$binary" ]; then
+  case $(uname -s) in Linux) os=linux;; Darwin) os=darwin;; *) fail 'unsupported operating system';; esac
+  case $(uname -m) in x86_64|amd64) arch=amd64;; aarch64|arm64) arch=arm64;; *) fail 'unsupported architecture';; esac
+  asset=harvester_${version}_${os}_${arch}
+  sum=$(awk -v asset="$asset" '$2 == asset {print $1}' "$plugin/libexec/SHA256SUMS")
+  [ "${#sum}" -eq 64 ] || fail "no checksum for $asset"
+  case "$sum" in *[!0-9a-fA-F]*) fail "invalid checksum for $asset";; esac
+  staging=$(mktemp "$root/bin/$version/.download.XXXXXX") || fail 'cannot stage download'
+  base=${HARVESTER_RELEASE_BASE:-https://github.com/rezzminator/harvester/releases/download}
+  curl --fail --location --silent --show-error --connect-timeout 15 --max-time 120 "$base/v$version/$asset" -o "$staging" || fail "download failed for $asset"
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$staging"); actual=${actual%% *}
+  elif command -v shasum >/dev/null 2>&1; then
+    actual=$(shasum -a 256 "$staging"); actual=${actual%% *}
+  else fail 'sha256sum or shasum is required'; fi
+  [ "$actual" = "$sum" ] || fail "checksum mismatch for $asset"
+  chmod 700 "$staging" || fail 'cannot make binary executable'
+  mv -f "$staging" "$binary" || fail 'cannot publish binary'
+  staging=
+fi
+link_binary
+cleanup
+held=
+trap - EXIT
+exec "$binary" "$@"

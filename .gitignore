@@ -1,0 +1,5 @@
+/dist/
+/harvester
+/scripts/leak-terms.txt
+*.test
+__pycache__/

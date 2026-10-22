@@ -1,0 +1,28 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: verify release input
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          test "${GITHUB_REF_NAME#v}" = "$(cat VERSION)"
+          go build ./... && go vet ./... && go test ./...
+          scripts/release-check.sh --release
+      - name: build assets
+        run: scripts/build-release.sh
+      - name: publish tagged assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/harvester_* dist/SHA256SUMS --title "harvester ${GITHUB_REF_NAME#v}" --generate-notes --verify-tag

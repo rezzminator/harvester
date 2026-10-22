@@ -1,0 +1,174 @@
+package obs
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/rezzminator/harvester/internal/clock"
+)
+
+// compMCP is the component every MCP tool and prompt record belongs to.
+const compMCP = "mcp"
+
+// Tool wraps a typed mcp.AddTool handler in the mcp middleware (spec
+// § Middleware): `mcp.AddTool(server, tool, obs.Tool("ls", service.chatLS))`.
+// One record per call — tool, kind=tool, the argument SHAPE (field names and byte sizes, never a value), the result's
+// size in bytes, dur_ms and err — written after the handler returned. A
+// non-zero typed output beside a non-protocol error becomes structuredContent
+// on an IsError result. Both transports share the
+// registration, so stdio and HTTP calls log once each. A handler error logs
+// at ERROR; a result the handler marked IsError at WARN.
+//
+// A panicking handler is recovered here, at the one chokepoint every
+// registered tool crosses: the MCP SDK runs each request on its own
+// goroutine with no recover of its own, so an unrecovered panic would kill
+// the machine-wide daemon. The recovered call is one ERROR record naming the
+// tool (op=call, kind=tool, tool=name) plus obs.Recovered's bounded,
+// scrubbed message, and an error returned to the SDK so the caller sees a
+// tool error — the daemon survives and the next request runs normally.
+func Tool[In, Out any](name string, handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerFor[In, Out] {
+	return func(ctx context.Context, request *mcp.CallToolRequest, input In) (result *mcp.CallToolResult, output Out, err error) {
+		timing := current(ctx).timing
+		started := timing.Now()
+		defer func() {
+			recovered := recover()
+			if recovered == nil {
+				return
+			}
+			err = Recovered("tool "+name, recovered)
+			var zero Out
+			result, output = nil, zero
+			attrs := append(toolAttrs(name, input, started, timing), slog.String(FieldErr, err.Error()))
+			Logger(Component(ctx, compMCP)).LogAttrs(ctx, slog.LevelError, "mcp.call", attrs...)
+		}()
+		result, output, err = handler(ctx, request, input)
+		attrs := toolAttrs(name, input, started, timing)
+		level := slog.LevelInfo
+		switch {
+		case err != nil:
+			level = slog.LevelError
+			attrs = append(attrs, slog.String(FieldErr, err.Error()))
+		case result != nil && result.IsError:
+			level = slog.LevelWarn
+			attrs = append(attrs, slog.String(FieldErr, "tool result IsError"), slog.Int("bytes", encodedSize(result)))
+		case result != nil:
+			attrs = append(attrs, slog.Int("bytes", encodedSize(result)))
+		default:
+			attrs = append(attrs, slog.Int("bytes", encodedSize(output)))
+		}
+		Logger(Component(ctx, compMCP)).LogAttrs(ctx, level, "mcp.call", attrs...)
+		if err != nil && !reflect.ValueOf(&output).Elem().IsZero() {
+			if _, protocolError := err.(*jsonrpc.Error); !protocolError {
+				var errorResult mcp.CallToolResult
+				errorResult.SetError(err)
+				return &errorResult, output, nil
+			}
+		}
+		return result, output, err
+	}
+}
+
+// toolAttrs is the record shape every mcp.call for a tool carries before the
+// result/err-specific attrs: op, kind, tool, the argument shape and dur_ms,
+// shared between the success path and the recovered-panic path so
+// both write the identical shape.
+func toolAttrs(name string, input any, started time.Time, timing clock.Clock) []slog.Attr {
+	attrs := []slog.Attr{
+		slog.String("op", "call"),
+		slog.String("kind", "tool"),
+		slog.String("tool", name),
+		slog.String("args", argumentShape(input)),
+		slog.Int64(FieldDur, timing.Now().Sub(started).Milliseconds()),
+	}
+	return attrs
+}
+
+// argumentShape renders the SHAPE of a tool input — `target:4,message:27` —
+// the exported fields of a struct (json names, declaration order) or the keys
+// of a map (sorted), each with its byte size; a scalar is `bytes:N`; nil is
+// empty. Sizes are a string's length or its JSON encoding's; a value itself
+// never appears.
+func argumentShape(value any) string {
+	reflected, present := dereference(value)
+	if !present {
+		return ""
+	}
+	parts := make([]string, 0, 8)
+	switch reflected.Kind() {
+	case reflect.Struct:
+		for index := range reflected.NumField() {
+			field := reflected.Type().Field(index)
+			name := jsonName(field)
+			if !field.IsExported() || name == "-" {
+				continue
+			}
+			parts = append(parts, name+":"+strconv.Itoa(encodedSizeOf(reflected.Field(index))))
+		}
+	case reflect.Map:
+		for _, key := range reflected.MapKeys() {
+			parts = append(parts, fmt.Sprint(key.Interface())+":"+strconv.Itoa(encodedSizeOf(reflected.MapIndex(key))))
+		}
+		sort.Strings(parts)
+	default:
+		parts = append(parts, "bytes:"+strconv.Itoa(encodedSizeOf(reflected)))
+	}
+	return strings.Join(parts, ",")
+}
+
+// dereference follows pointers and interfaces to the value they hold; present
+// is false for nil at any hop.
+func dereference(value any) (reflect.Value, bool) {
+	reflected := reflect.ValueOf(value)
+	for reflected.IsValid() && (reflected.Kind() == reflect.Pointer || reflected.Kind() == reflect.Interface) {
+		if reflected.IsNil() {
+			return reflect.Value{}, false
+		}
+		reflected = reflected.Elem()
+	}
+	return reflected, reflected.IsValid()
+}
+
+// jsonName is the name a field carries on the wire: its json tag's name, else
+// the Go field name.
+func jsonName(field reflect.StructField) string {
+	name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+	if name == "" {
+		return field.Name
+	}
+	return name
+}
+
+// encodedSizeOf is a string's byte length or the JSON size of anything else;
+// -1 when the value cannot be encoded, so an unencodable field is visible
+// rather than silently absent.
+func encodedSizeOf(value reflect.Value) int {
+	if value.Kind() == reflect.Interface && !value.IsNil() {
+		value = value.Elem()
+	}
+	if value.Kind() == reflect.String {
+		return len(value.String())
+	}
+	if !value.IsValid() || !value.CanInterface() {
+		return -1
+	}
+	return encodedSize(value.Interface())
+}
+
+// encodedSize is the JSON size of value, -1 when it cannot be encoded.
+func encodedSize(value any) int {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return -1
+	}
+	return len(encoded)
+}
