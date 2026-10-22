@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,7 +36,7 @@ func startProxyTestHarness(t *testing.T, proxy *stdioProxy) *proxyTestHarness {
 	}
 	t.Cleanup(func() {
 		_ = inputWriter.Close()
-		go func() { _, _ = io.Copy(io.Discard, harness.output) }()
+		go func() { _, _ = io.Copy(io.Discard, output) }()
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
@@ -78,6 +79,40 @@ func (harness *proxyTestHarness) read(t *testing.T) map[string]any {
 		t.Fatal("timed out waiting for proxy response")
 	}
 	return nil
+}
+
+type proxyReadSignal struct {
+	io.Reader
+	started chan struct{}
+	once    sync.Once
+}
+
+func (reader *proxyReadSignal) Read(data []byte) (int, error) {
+	reader.once.Do(func() { close(reader.started) })
+	return reader.Reader.Read(data)
+}
+
+func TestProxyHarnessCleanupUnblocksPendingRead(t *testing.T) {
+	finished := make(chan error, 1)
+	t.Run("pending read", func(t *testing.T) {
+		proxy := newStdioProxy(context.Background(), "", io.Discard)
+		harness := startProxyTestHarness(t, proxy)
+		started := make(chan struct{})
+		harness.output = bufio.NewReader(&proxyReadSignal{Reader: harness.output, started: started})
+		go func() {
+			_, err := harness.output.ReadBytes('\n')
+			finished <- err
+		}()
+		<-started
+	})
+	select {
+	case err := <-finished:
+		if err != io.EOF {
+			t.Fatalf("pending read returned %v, want EOF", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pending read survived harness cleanup")
+	}
 }
 
 func TestProxyHarnessClosesDaemonSessionBeforeCleanupReturns(t *testing.T) {
