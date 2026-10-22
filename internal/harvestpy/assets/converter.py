@@ -1806,7 +1806,7 @@ def convert_pdf(path: pathlib.Path, request: dict) -> tuple[str, dict]:
 # ---------------------------------------------------------------------------
 # OCR — the bake-off's verdict (docling + RapidOCR on onnxruntime, one model
 # per script, Hebrew through a system tesseract). Models are staged by
-# `pfm install` under the pfm state dir (HARVESTPY_MODEL_ROOT) and the reader
+# `harvester setup` under the harvester state dir (HARVESTPY_MODEL_ROOT) and the reader
 # runs offline: a model that is not staged is a named failure, never a
 # download in the middle of a read.
 
@@ -1966,7 +1966,7 @@ def _page_list(indexes: list[int]) -> str:
 def _model_root() -> pathlib.Path:
     if not _MODEL_ROOT:
         raise OCRModelsNotStaged(
-            "no OCR model directory is configured (HARVESTPY_MODEL_ROOT unset) — run `pfm install` to stage the OCR models"
+            "no OCR model directory is configured (HARVESTPY_MODEL_ROOT unset) — run `harvester setup` to stage the OCR models"
         )
     return pathlib.Path(_MODEL_ROOT)
 
@@ -1989,7 +1989,7 @@ def require_staged(root: pathlib.Path, name: str) -> None:
         missing = f"{marker.name} ({type(exc).__name__})"
     if missing:
         raise OCRModelsNotStaged(
-            f"the OCR models for {name} are not staged (missing {missing}) — run `pfm install` to stage them"
+            f"the OCR models for {name} are not staged (missing {missing}) — run `harvester setup` to stage them"
             " (the first run downloads about 1.06 GB); the harvester never downloads a model mid-read"
         )
 
@@ -2129,7 +2129,7 @@ def _ocr_pages(source, flagged: list[int], script: str) -> tuple[dict[int, str],
 
 
 def stage_models(root: pathlib.Path) -> dict:
-    """`pfm install`'s staging: warm every model the reader loads — docling's
+    """`harvester setup`'s staging: warm every model the reader loads — docling's
     layout+table models and one RapidOCR model per script — by converting a
     one-page PDF with each script's exact configuration, then record the files
     each set needs (require_staged checks them before every read)."""
