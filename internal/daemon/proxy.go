@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/rezzminator/harvester/internal/clock"
 	"github.com/rezzminator/harvester/internal/config"
+	"github.com/rezzminator/harvester/internal/harvestmcp"
 	"github.com/rezzminator/harvester/internal/obs"
 	"github.com/rezzminator/harvester/internal/paths"
 	"io"
@@ -143,6 +144,10 @@ func (w *lockedWriter) Write(body []byte) (int, error) {
 }
 
 func (proxy *stdioProxy) read(ctx context.Context, input io.Reader, output io.Writer) error {
+	directory, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve proxy working directory: %w", err)
+	}
 	requestCtx, cancelRequests := context.WithCancel(ctx)
 	var pending sync.WaitGroup
 	var pendingAdmission *proxyRequestState
@@ -161,6 +166,7 @@ func (proxy *stdioProxy) read(ctx context.Context, input io.Reader, output io.Wr
 				decodeErr := json.Unmarshal(frame, &envelope)
 				var cancellationState *proxyRequestState
 				if decodeErr == nil {
+					frame = resolveProxyReadFiles(frame, envelope, directory)
 					proxy.resolvePendingAdmission(pendingAdmission, envelope)
 					pendingAdmission = nil
 				}
@@ -213,6 +219,50 @@ func (proxy *stdioProxy) read(ctx context.Context, input io.Reader, output io.Wr
 			return fmt.Errorf("read stdio proxy frame: %w", err)
 		}
 	}
+}
+
+func resolveProxyReadFiles(raw []byte, frame proxyFrame, directory string) []byte {
+	if frame.Method != "tools/call" {
+		return raw
+	}
+	var params map[string]json.RawMessage
+	if json.Unmarshal(frame.Params, &params) != nil {
+		return raw
+	}
+	var name string
+	if json.Unmarshal(params["name"], &name) != nil || name != "read" {
+		return raw
+	}
+	var arguments map[string]json.RawMessage
+	if json.Unmarshal(params["arguments"], &arguments) != nil {
+		return raw
+	}
+	var files []json.RawMessage
+	if json.Unmarshal(arguments["files"], &files) != nil {
+		return raw
+	}
+	changed := false
+	for index, value := range files {
+		var source string
+		if len(value) == 0 || value[0] != '"' || json.Unmarshal(value, &source) != nil {
+			continue // Leave malformed values to the tool's schema validation.
+		}
+		resolved := harvestmcp.ResolveReadFile(source, directory)
+		if resolved != source {
+			files[index], _ = json.Marshal(resolved)
+			changed = true
+		}
+	}
+	if !changed {
+		return raw
+	}
+	arguments["files"], _ = json.Marshal(files)
+	params["arguments"], _ = json.Marshal(arguments)
+	var envelope map[string]json.RawMessage
+	json.Unmarshal(raw, &envelope)
+	envelope["params"], _ = json.Marshal(params)
+	resolved, _ := json.Marshal(envelope)
+	return resolved
 }
 
 func (proxy *stdioProxy) forward(ctx context.Context, raw []byte, output io.Writer) {

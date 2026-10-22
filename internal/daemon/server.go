@@ -25,6 +25,7 @@ import (
 func runtimeForService(cfg config.Runtime) harvestmcp.Runtime {
 	runtime := harvestmcp.RuntimeFromConfig(cfg.Paths.Home, cfg.Config.Harvester)
 	runtime.Machine = &cfg.Config
+	runtime.RequireAbsoluteFiles = true
 	// Identical runner identity lets both security views hold the same converter pool.
 	runtime.Runner = obs.Runner(deps.RealRunner{})
 	return runtime

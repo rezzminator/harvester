@@ -49,11 +49,13 @@ type Runtime struct {
 	Home       string
 	CacheDir   string
 	LocalRoots []string
-	Python     string
-	Script     string
-	UserAgent  string
-	ProxyURL   string
-	Client     *http.Client
+	// The singleton daemon cannot infer a caller's working directory.
+	RequireAbsoluteFiles bool
+	Python               string
+	Script               string
+	UserAgent            string
+	ProxyURL             string
+	Client               *http.Client
 
 	SearXNGURL    string
 	BraveAPIKey   string

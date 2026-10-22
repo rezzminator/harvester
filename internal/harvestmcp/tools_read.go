@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -159,6 +160,10 @@ func (service *Service) readMany(ctx context.Context, jobs []readJob, request re
 		if misplacedBy[index] = misplaced(job.field, job.source, service.runtime.Remote); misplacedBy[index] != "" {
 			continue
 		}
+		if service.runtime.RequireAbsoluteFiles && job.field == fieldFiles && !absoluteReadFile(job.source) {
+			misplacedBy[index] = "the daemon requires absolute file paths; use an absolute path or call through harvester mcp."
+			continue
+		}
 		wait.Add(1)
 		go service.fetchOne(ctx, semaphore, &wait, index, job, request, results)
 	}
@@ -246,6 +251,25 @@ func isLocalInput(source string) bool {
 	s := strings.TrimSpace(source)
 	return filepath.IsAbs(s) || strings.HasPrefix(strings.ToLower(s), "file://") ||
 		strings.HasPrefix(s, "./") || strings.HasPrefix(s, "../") || strings.HasPrefix(s, "~/")
+}
+
+// ResolveReadFile resolves a local read input in the caller's directory,
+// leaving identifiers, URLs and invalid inputs for the tool's validation.
+func ResolveReadFile(source, directory string) string {
+	source = strings.TrimSpace(source)
+	if source == "" || filepath.IsAbs(source) || strings.HasPrefix(strings.ToLower(source), "file:") || misplaced(fieldFiles, source, false) != "" {
+		return source
+	}
+	return filepath.Join(directory, source)
+}
+
+func absoluteReadFile(source string) bool {
+	source = strings.TrimSpace(source)
+	if strings.HasPrefix(strings.ToLower(source), "file:") {
+		parsed, err := url.Parse(source)
+		return err == nil && parsed.Opaque == "" && filepath.IsAbs(parsed.Path)
+	}
+	return filepath.IsAbs(source)
 }
 
 // misplaced is read's per-item field check: a source in the wrong field
