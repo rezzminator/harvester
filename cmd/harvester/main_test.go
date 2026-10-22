@@ -52,6 +52,25 @@ func TestHarvestDispatchReachesHarvestcli(t *testing.T) {
 	}
 }
 
+func TestDoctorHelpExitStatus(t *testing.T) {
+	for _, argument := range []string{"--help", "-h", "--unknown-flag"} {
+		t.Run(argument, func(t *testing.T) {
+			command := exec.Command(os.Args[0], "doctor", argument)
+			command.Env = append(os.Environ(), "HARVESTER_TEST_MAIN=1")
+			output, err := command.CombinedOutput()
+			if argument == "--unknown-flag" {
+				if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 2 {
+					t.Fatalf("invalid doctor flag: error=%v output=%s", err, output)
+				}
+				return
+			}
+			if err != nil || !strings.Contains(string(output), "Usage of harvester doctor:") {
+				t.Fatalf("doctor help: error=%v output=%s", err, output)
+			}
+		})
+	}
+}
+
 func externalRuntime(t *testing.T) config.Runtime {
 	t.Helper()
 	home := t.TempDir()

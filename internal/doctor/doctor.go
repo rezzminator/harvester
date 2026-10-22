@@ -20,6 +20,9 @@ func Run(args []string, stdout, stderr io.Writer, runtime config.Runtime) int {
 	jsonOutput := flags.Bool("json", false, "print health rows as JSON")
 	skipConversion := flags.Bool("skip-conversion", false, "exclude the optional conversion environment from health")
 	if err := flags.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
 		return 2
 	}
 	if flags.NArg() != 0 {
