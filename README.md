@@ -132,6 +132,12 @@ state from `~/.professor/.harvester-state` to
 both `cache.dir` and `external.stateDir` are unset; explicit locations remain
 unchanged. An explicit `cache.dir` remains the cache location.
 
+Cross-filesystem migration verifies its copy and rescans for late writes; if the
+legacy directory is retained and setup warns, it uses extra disk space, so stop
+legacy writers and reconcile retained files before removing it manually. A
+destination conflict never overwrites the published entry; setup retains the
+legacy and destination entries for manual reconciliation.
+
 ## Development
 
 Run the build, vet, and test checks inside the project fence as described in

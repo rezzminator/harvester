@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -44,10 +46,15 @@ func TestMoveStateRenameAndIdempotentRerun(t *testing.T) {
 	}
 }
 
-func TestMoveStateAcrossFilesystemsVerifiesAndPreservesLinks(t *testing.T) {
+func TestMoveStateAcrossFilesystemsVerifiesAndRetainsSource(t *testing.T) {
 	old := renameState
 	t.Cleanup(func() { renameState = old })
-	renameState = func(string, string) error { return syscall.EXDEV }
+	renameState = func(source, target string) error {
+		if filepath.Ext(source) != ".harvester-migrate" {
+			return syscall.EXDEV
+		}
+		return os.Rename(source, target)
+	}
 	root := t.TempDir()
 	source, target := filepath.Join(root, "old"), filepath.Join(root, "new")
 	putState(t, source, "html/item.md", "verified")
@@ -58,8 +65,8 @@ func TestMoveStateAcrossFilesystemsVerifiesAndPreservesLinks(t *testing.T) {
 	if err := os.Symlink("html/item.md", filepath.Join(source, "link")); err != nil {
 		t.Fatal(err)
 	}
-	if err := moveState(source, target); err != nil {
-		t.Fatal(err)
+	if err := moveState(source, target); !errors.Is(err, errMigrationRetained) {
+		t.Fatalf("retention notice=%v", err)
 	}
 	body, err := os.ReadFile(filepath.Join(target, "link"))
 	if err != nil || string(body) != "verified" {
@@ -72,8 +79,8 @@ func TestMoveStateAcrossFilesystemsVerifiesAndPreservesLinks(t *testing.T) {
 	if !info.ModTime().Equal(stamp) {
 		t.Fatalf("cache mtime changed during migration: got %s want %s", info.ModTime(), stamp)
 	}
-	if _, err := os.Stat(source); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("source not removed: %v", err)
+	if _, err := os.Stat(source); err != nil {
+		t.Fatalf("source not retained: %v", err)
 	}
 }
 
@@ -98,7 +105,7 @@ func TestMoveStateRejectsConflictsAndUnsafeRoots(t *testing.T) {
 	}
 }
 
-func TestMoveStateResumesAfterPublishOrInterruptedDeletion(t *testing.T) {
+func TestMoveStateRetainsPreviouslyPublishedOrRetiredSource(t *testing.T) {
 	for _, retired := range []bool{false, true} {
 		t.Run(map[bool]string{false: "published", true: "deleting"}[retired], func(t *testing.T) {
 			root := t.TempDir()
@@ -118,11 +125,15 @@ func TestMoveStateResumesAfterPublishOrInterruptedDeletion(t *testing.T) {
 				}
 				putState(t, target, "removed-before-kill", "also preserved")
 			}
-			if err := moveState(source, target); err != nil {
-				t.Fatal(err)
+			if err := moveState(source, target); !errors.Is(err, errMigrationRetained) {
+				t.Fatalf("retention notice=%v", err)
 			}
-			if _, err := os.Lstat(source + ".harvester-migrated"); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("retirement not cleaned: %v", err)
+			retainedPath := source
+			if retired {
+				retainedPath += ".harvester-migrated"
+			}
+			if _, err := os.Stat(filepath.Join(retainedPath, "keep")); err != nil {
+				t.Fatalf("previous source not retained: %v", err)
 			}
 		})
 	}
@@ -131,7 +142,12 @@ func TestMoveStateResumesAfterPublishOrInterruptedDeletion(t *testing.T) {
 func TestMoveStateCopyFailureRetainsSource(t *testing.T) {
 	old := renameState
 	t.Cleanup(func() { renameState = old })
-	renameState = func(string, string) error { return syscall.EXDEV }
+	renameState = func(source, target string) error {
+		if filepath.Ext(source) != ".harvester-migrate" {
+			return syscall.EXDEV
+		}
+		return os.Rename(source, target)
+	}
 	root := t.TempDir()
 	source, target := filepath.Join(root, "old"), filepath.Join(root, "new")
 	putState(t, source, "safe", "preserved")
@@ -213,5 +229,172 @@ func TestMoveStateCleansOnlyJournaledInterruptedStage(t *testing.T) {
 				t.Fatalf("own interrupted journal remains: %v", err)
 			}
 		})
+	}
+}
+
+func TestMoveStatePreservesWritesAfterVerification(t *testing.T) {
+	restore := harvest.StubPublicResolverForTest(func(context.Context, string) ([]net.IP, error) { return []net.IP{net.ParseIP("93.184.216.34")}, nil })
+	t.Cleanup(restore)
+	root := t.TempDir()
+	source, target := filepath.Join(root, "old"), filepath.Join(root, "new")
+	putState(t, source, "html/item.md", "before verification")
+	original, err := harvest.New(harvest.Options{CacheDir: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var handle string
+	old := renameState
+	t.Cleanup(func() { renameState = old })
+	renameState = func(from, to string) error {
+		if from == source {
+			return syscall.EXDEV
+		}
+		if from == target+".harvester-migrate" {
+			handle, err = original.PublicHandle("https://example.test/late-article")
+			if err != nil {
+				return err
+			}
+
+		}
+		return os.Rename(from, to)
+	}
+	migrationErr := moveState(source, target)
+	if _, err := os.Stat(source); err != nil {
+		t.Fatalf("late writer's source removed: %v (migration=%v)", err, migrationErr)
+	}
+	replacement, err := harvest.New(harvest.Options{CacheDir: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := replacement.ResolvePublicSource(handle)
+	if err != nil || resolved != "https://example.test/late-article" {
+		t.Fatalf("late persistent handle resolved=%q error=%v (migration=%v)", resolved, err, migrationErr)
+	}
+	for _, dir := range []string{source, target} {
+		body, err := os.ReadFile(filepath.Join(dir, "html/item.md"))
+		if err != nil || string(body) != "before verification" {
+			t.Fatalf("late file update at %s = %q error=%v", dir, body, err)
+		}
+	}
+	if !errors.Is(migrationErr, errMigrationRetained) {
+		t.Fatalf("retained source was not reported: %v", migrationErr)
+	}
+}
+
+func TestMoveStateRepeatedLateWritesRetainSourceAndBoundRetries(t *testing.T) {
+	root := t.TempDir()
+	source, target := filepath.Join(root, "old"), filepath.Join(root, "new")
+	putState(t, source, "original", "preserved")
+	oldRename, oldCopy := renameState, copyMigrationState
+	t.Cleanup(func() { renameState, copyMigrationState = oldRename, oldCopy })
+	renameState = func(string, string) error { return syscall.EXDEV }
+	copies := 0
+	copyMigrationState = func(from, to string) error {
+		if err := copyState(from, to); err != nil {
+			return err
+		}
+		copies++
+		putState(t, source, fmt.Sprintf("late-%d", copies), "new handle")
+		return nil
+	}
+	err := moveState(source, target)
+	if err == nil || !strings.Contains(err.Error(), "keeps changing") {
+		t.Fatalf("active writer not reported: %v", err)
+	}
+	if copies != 4 {
+		t.Fatalf("copy attempts=%d want 4", copies)
+	}
+	for n := 1; n <= copies; n++ {
+		if _, err := os.Stat(filepath.Join(source, fmt.Sprintf("late-%d", n))); err != nil {
+			t.Fatalf("uncopied source lost: %v", err)
+		}
+	}
+	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unverified target published: %v", err)
+	}
+}
+
+func TestMoveStateCleanupFailureIsNotARetentionNotice(t *testing.T) {
+	root := t.TempDir()
+	source, target := filepath.Join(root, "old"), filepath.Join(root, "new")
+	putState(t, source, "item", "preserved")
+	oldRename := renameState
+	t.Cleanup(func() { renameState = oldRename })
+	renameState = func(from, to string) error {
+		if from == source {
+			return syscall.EXDEV
+		}
+		if err := os.Rename(from, to); err != nil {
+			return err
+		}
+		return os.WriteFile(target+".harvester-migrate.json", []byte("invalid journal"), 0o600)
+	}
+	err := moveState(source, target)
+	if err == nil || errors.Is(err, errMigrationRetained) || !strings.Contains(err.Error(), "cleanup failed") {
+		t.Fatalf("cleanup failure demoted to warning: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(source, "item")); err != nil {
+		t.Fatalf("source lost: %v", err)
+	}
+}
+
+func TestMoveStateVerifiesFinalRetryAfterWriterQuiesces(t *testing.T) {
+	root := t.TempDir()
+	source, target := filepath.Join(root, "old"), filepath.Join(root, "new")
+	putState(t, source, "item", "original")
+	oldRename, oldCopy := renameState, copyMigrationState
+	t.Cleanup(func() { renameState, copyMigrationState = oldRename, oldCopy })
+	renameState = func(from, to string) error {
+		if from == source {
+			return syscall.EXDEV
+		}
+		return os.Rename(from, to)
+	}
+	copies := 0
+	copyMigrationState = func(from, to string) error {
+		if err := copyState(from, to); err != nil {
+			return err
+		}
+		copies++
+		if copies < 4 {
+			putState(t, source, "item", fmt.Sprintf("revision-%d", copies))
+		}
+		return nil
+	}
+	if err := moveState(source, target); !errors.Is(err, errMigrationRetained) {
+		t.Fatalf("quiescent final copy rejected: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(target, "item"))
+	if err != nil || string(body) != "revision-3" {
+		t.Fatalf("final revision=%q error=%v", body, err)
+	}
+}
+
+func TestMoveStateNeverOverwritesPublishedDestination(t *testing.T) {
+	root := t.TempDir()
+	source, target := filepath.Join(root, "old"), filepath.Join(root, "new")
+	putState(t, source, "item", "original")
+	oldRename := renameState
+	t.Cleanup(func() { renameState = oldRename })
+	renameState = func(from, to string) error {
+		if from == source {
+			return syscall.EXDEV
+		}
+		if err := os.Rename(from, to); err != nil {
+			return err
+		}
+		putState(t, target, "item", "new destination writer")
+		putState(t, source, "item", "late legacy writer")
+		return nil
+	}
+	err := moveState(source, target)
+	if err == nil || errors.Is(err, errMigrationRetained) {
+		t.Fatalf("published conflict not reported: %v", err)
+	}
+	for dir, want := range map[string]string{source: "late legacy writer", target: "new destination writer"} {
+		body, readErr := os.ReadFile(filepath.Join(dir, "item"))
+		if readErr != nil || string(body) != want {
+			t.Fatalf("writer data at %s lost: %q %v (migration=%v)", dir, body, readErr, err)
+		}
 	}
 }

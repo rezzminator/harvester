@@ -1,12 +1,14 @@
 package setup
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/rezzminator/harvester/internal/config"
@@ -212,5 +214,59 @@ func TestSetupEnsuresDaemonLastAndPropagatesFailure(t *testing.T) {
 	}
 	if err := run(t.Context(), cfg, true, io.Discard, ops); err == nil || !ensured || !strings.Contains(err.Error(), "daemon startup failed") {
 		t.Fatalf("ensure=%t err=%v", ensured, err)
+	}
+}
+
+func TestSetupCrossFilesystemCopiesRetainLegacyPythonAndReport(t *testing.T) {
+	cfg, old, root := setupFixture(t)
+	oldRename := renameState
+	t.Cleanup(func() { renameState = oldRename })
+	renameState = func(source, target string) error {
+		if strings.HasSuffix(source, ".harvester-migrate") {
+			return os.Rename(source, target)
+		}
+		return syscall.EXDEV
+	}
+	var output bytes.Buffer
+	if err := run(t.Context(), cfg, true, &output, fixtureOperations(t, old, root, false)); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"cache/pinned.tar.gz", "models/model", "env/interpreter"} {
+		if _, err := os.Stat(filepath.Join(old, name)); err != nil {
+			t.Fatalf("retained legacy %s lost after setup: %v", name, err)
+		}
+	}
+	if !strings.Contains(output.String(), "legacy state retained") || !strings.Contains(output.String(), "reconcile retained files") {
+		t.Fatalf("retention remedy missing: %s", output.String())
+	}
+	if !strings.Contains(output.String(), "daemon ready") {
+		t.Fatalf("setup did not complete: %s", output.String())
+	}
+	if err := run(t.Context(), cfg, true, &output, fixtureOperations(t, old, root, false)); err != nil {
+		t.Fatalf("retained-source rerun: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(old, "cache/pinned.tar.gz")); err != nil {
+		t.Fatalf("rerun deleted source: %v", err)
+	}
+}
+
+func TestSetupRetainsLegacyCacheRecreatedAfterRename(t *testing.T) {
+	cfg, old, root := setupFixture(t)
+	ops := fixtureOperations(t, old, root, false)
+	stageModels := ops.models
+	ops.models = func(ctx context.Context, options harvestpy.OCRStageOptions) (harvestpy.OCRStaging, error) {
+		putState(t, old, "cache/late-handle.json", "unverified late handle")
+		return stageModels(ctx, options)
+	}
+	var output bytes.Buffer
+	if err := run(t.Context(), cfg, true, &output, ops); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(old, "cache/late-handle.json"))
+	if err != nil || string(body) != "unverified late handle" {
+		t.Fatalf("uncopied late handle lost: body=%q err=%v", body, err)
+	}
+	if !strings.Contains(output.String(), "reconcile retained files") {
+		t.Fatalf("retention remedy missing: %s", output.String())
 	}
 }

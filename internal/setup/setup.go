@@ -127,23 +127,33 @@ func run(ctx context.Context, cfg config.Runtime, offline bool, stdout io.Writer
 	if _, err := directory(root); err != nil {
 		return err
 	}
-	if err := moveState(filepath.Join(legacyState, "harvest-ask"), paths.AskRoot(home)); err != nil {
+	retainedLegacy := false
+	migrate := func(source, target string) error {
+		err := moveState(source, target)
+		if errors.Is(err, errMigrationRetained) {
+			retainedLegacy = true
+			fmt.Fprintf(stdout, "setup: warning: %v; stop legacy writers and reconcile retained files before manual removal\n", err)
+			return nil
+		}
+		return err
+	}
+	if err := migrate(filepath.Join(legacyState, "harvest-ask"), paths.AskRoot(home)); err != nil {
 		return fmt.Errorf("migrate ask state: %w", err)
 	}
 	if cfg.Config.Harvester.Cache.Dir == "" {
 		for _, name := range []string{".harvester-cache", ".cache"} {
-			if err := moveState(filepath.Join(home, ".professor", name), paths.HarvesterCacheDir(home)); err != nil {
+			if err := migrate(filepath.Join(home, ".professor", name), paths.HarvesterCacheDir(home)); err != nil {
 				return fmt.Errorf("migrate cache %s: %w", name, err)
 			}
 		}
 		if cfg.Config.Harvester.External.StateDir == "" {
-			if err := moveState(filepath.Join(home, ".professor", ".harvester-state"), filepath.Join(state, ".harvester-state")); err != nil {
+			if err := migrate(filepath.Join(home, ".professor", ".harvester-state"), filepath.Join(state, ".harvester-state")); err != nil {
 				return fmt.Errorf("migrate gateway OAuth state: %w", err)
 			}
 		}
 	}
 	for _, name := range []string{"cache", "models"} {
-		if err := moveState(filepath.Join(oldPython, name), filepath.Join(root, name)); err != nil {
+		if err := migrate(filepath.Join(oldPython, name), filepath.Join(root, name)); err != nil {
 			return fmt.Errorf("migrate Python %s: %w", name, err)
 		}
 	}
@@ -166,11 +176,19 @@ func run(ctx context.Context, cfg config.Runtime, offline bool, stdout io.Writer
 	}
 	if exists, err := directory(oldPython); err != nil {
 		return err
-	} else if exists {
+	} else if exists && !retainedLegacy {
 		if err := validateLegacyPython(oldPython); err != nil {
 			return err
 		}
-		if err := os.RemoveAll(oldPython); err != nil {
+		for _, name := range []string{"env", "env-browser"} {
+			if err := os.RemoveAll(filepath.Join(oldPython, name)); err != nil {
+				return fmt.Errorf("remove replaced legacy environment %s: %w", name, err)
+			}
+		}
+		if err := os.Remove(oldPython); errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+			retainedLegacy = true
+			fmt.Fprintf(stdout, "setup: warning: legacy state retained at %s; stop legacy writers and reconcile retained files before manual removal\n", oldPython)
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove healthy replacement's legacy Python root: %w", err)
 		}
 	}
@@ -181,6 +199,9 @@ func run(ctx context.Context, cfg config.Runtime, offline bool, stdout io.Writer
 	}
 	if err := ops.ensure(ctx, cfg); err != nil {
 		return fmt.Errorf("ensure persistent harvester daemon: %w", err)
+	}
+	if retainedLegacy {
+		fmt.Fprintln(stdout, "setup: legacy sources retained; verified state copies available")
 	}
 	fmt.Fprintln(stdout, "setup: conversion healthy; state migration complete; gateway service configured; daemon ready")
 	return nil
