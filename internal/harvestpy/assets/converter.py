@@ -1740,7 +1740,8 @@ def _pdf_checked_text(page, markdown: str, ocr: bool) -> tuple[str, list[str]]:
         substantive.pop(str(page.number + 1), None)
         unreadable = "\ufffd" in source or re.search(r"\(cid:\d+\)", source)
         controls = sum(1 for ch in source if unicodedata.category(ch) == "Cc" and ch not in "\n\t\r")
-        if substantive and len(source.strip()) >= 20 and not unreadable and controls <= len(source) * OCR_CONTROL_SHARE:
+        usable = len(source.strip()) >= 20 or not page.get_image_info()
+        if substantive and usable and not unreadable and controls <= len(source) * OCR_CONTROL_SHARE:
             runs = None if ocr else _margin_runs(normalized(source), normalized(markdown), missing)
             if runs:
                 gaps[-1] = (
@@ -1777,19 +1778,21 @@ def convert_pdf(path: pathlib.Path, request: dict) -> tuple[str, dict]:
         if flagged:
             script, reason = choose_ocr_script(document, str(request.get("ocr_language") or ""))
             ocr_pages, limits = _ocr_pages(document, flagged, script)
-            if not any(text.strip() for text in ocr_pages.values()) and len(flagged) == page_count and limits:
-                raise OCRUnavailable("; ".join(limits))
             parts.append(_note(f"OCR read page(s) {_page_list(flagged)} of {page_count} as {_SCRIPT_NAMES[script]} ({reason})"))
             gaps.extend(limits)
             gaps.append(f"OCR page(s) {_page_list(flagged)}: image-only text completeness cannot be verified")
         images = []
+        readable = False
         for index, page in enumerate(document):
             markdown = ocr_pages.get(index, "") if index in flagged else _pymupdf4llm_markdown(path, layout, [index])
             markdown, losses = _pdf_checked_text(page, markdown, index in flagged)
+            readable = readable or bool(markdown.strip())
             gaps.extend(losses)
             if index not in flagged and page.get_image_info():
                 images.append(index)
             parts.append(markdown)
+        if flagged and len(flagged) == page_count and not readable and limits:
+            raise OCRUnavailable("; ".join(limits))
         if images:
             gaps.append(f"PDF page(s) {_page_list(images)}: images were not OCR-read, image-only text may be missing")
         parts = [f"_Converter gap: {gap}_" for gap in gaps] + parts
