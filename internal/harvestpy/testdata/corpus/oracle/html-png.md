@@ -1009,7 +1009,39 @@ The cICP chunk *MUST* come before the [PLTE](#11PLTE) and [IDAT](#11IDAT) chunks
 
 This chunk, if understood by the decoder, is the [highest-precedence color chunk](#color-chunk-precendence).
 
+cICP chunk field values for a [full-range image](#dfn-full-range-image) that uses the color primaries and the [PQ](#dfn-pq) [transfer function](#dfn-transfer-function) specified at [[ITU-R-BT.2100](#bib-itu-r-bt.2100)]:
+
+```
+09 10 00 01
+```
+
+(Four 1-byte unsigned integers, in hexadecimal)
+
+cICP chunk field values for a [full-range image](#dfn-full-range-image) that uses the color primaries and the [HLG](#dfn-hlg) [transfer function](#dfn-transfer-function) specified at [[ITU-R-BT.2100](#bib-itu-r-bt.2100)]:
+
+```
+09 12 00 01
+```
+
+(Four 1-byte unsigned integers, in hexadecimal)
+
+cICP chunk field values for a [narrow-range image](#dfn-narrow-range-image) that uses the color primaries and the [transfer function](#dfn-transfer-function) defined at [[ITU-R-BT.709](#bib-itu-r-bt.709)]:
+
+```
+01 01 00 00
+```
+
+(Four 1-byte unsigned integers, in hexadecimal)
+
 In a similar way to the use of the [sRGB](#srgb-standard-colour-space) chunk to compactly signal an sRGB image, cICP can be used to compactly signal a Display P3 image [[Display-P3](#bib-display-p3)].
+
+cICP chunk field values for a [full-range image](#dfn-full-range-image) that uses the color primaries and the [transfer function](#dfn-transfer-function) defined by [[Display-P3](#bib-display-p3)]:
+
+```
+0C 0D 00 01
+```
+
+(Four 1-byte unsigned integers, in hexadecimal)
 
 The four-byte chunk type field contains the hexadecimal values
 
@@ -1052,7 +1084,59 @@ The mDCV chunk *MUST* come before the [PLTE](#11PLTE) and [IDAT](#11IDAT) chunks
 
 Below are mDCV examples for [[ITU-R-BT.2100](#bib-itu-r-bt.2100)] [HDR](#dfn-hdr).
 
+Example mDCV chunk mastering display color primaries for [HDR](#dfn-hdr) [[ITU-R-BT.2100](#bib-itu-r-bt.2100)]:
+
+| Name | Actual values | Stored Decimal values | Stored Hexadecimal values |
+|---|---|---|---|
+| Color primaries specified in [[ITU-R-BT.2020](#bib-itu-r-bt.2020)] | (0.708, 0.292) | { 35400, 14600 } | { 8A 48, 39 08 } |
+| (0.170, 0.797) | { 8500, 39850 } | { 21 34, 9B AA } |  |
+| (0.131, 0.046) | { 6550, 2300 } | { 19 96, 08 FC } |  |
+
+Example mDCV chunk mastering display white point for [HDR](#dfn-hdr) [[ITU-R-BT.2100](#bib-itu-r-bt.2100)]:
+
+| Name | Actual values | Stored Decimal values | Stored Hexadecimal values |
+|---|---|---|---|
+| Illuminant D65 specified in [[SMPTE-RP-177](#bib-smpte-rp-177)] | (0.3127, 0.3290) | { 15635, 16450 } | { 3C 05, 40 42 } |
+
+Example mDCV chunk mastering display maximum luminance for [HDR](#dfn-hdr) [[ITU-R-BT.2100](#bib-itu-r-bt.2100)]:
+
+| Actual value | Stored Decimal value | Stored Hexadecimal value |
+|---|---|---|
+| 4000 cd/m2 | 40000000 | 02 62 5A 00 |
+
+Example mDCV chunk mastering display minimum luminance:
+
+| Actual value | Stored Decimal value | Stored Hexadecimal value |
+|---|---|---|
+| 0.0005 cd/m2 | 5 | 00 00 00 05 |
+
 Below are mDCV examples for [[Display-P3](#bib-display-p3)] [SDR](#dfn-sdr).
+
+Example mDCV chunk mastering display color primaries for [[Display-P3](#bib-display-p3)]:
+
+| Name | Actual values | Stored Decimal values | Stored Hexadecimal values |
+|---|---|---|---|
+| Color primaries specified in [[Display-P3](#bib-display-p3)] | (0.68, 0.32) | { 34000, 16000 } | { 84 D0, 3E 80 } |
+| (0.265, 0.69) | { 13520, 34500 } | { 34 D0, 86 C4 } |  |
+| (0.15, 0.06) | { 7500, 3000 } | { 1D 4C, 0B B8 } |  |
+
+Example mDCV chunk mastering display white point for [[Display-P3](#bib-display-p3)]:
+
+| Name | Actual values | Stored Decimal values | Stored Hexadecimal values |
+|---|---|---|---|
+| Illuminant D65 specified in [[SMPTE-RP-177](#bib-smpte-rp-177)] | (0.3127, 0.3290) | { 15635, 16450 } | { 3D 13, 40 42 } |
+
+Example mDCV chunk mastering display maximum luminance for [[Display-P3](#bib-display-p3)]:
+
+| Actual value | Stored Decimal values | Stored Hexadecimal values |
+|---|---|---|
+| 80 cd/m2 | 800000 | 00 0C 35 00 |
+
+Example mDCV chunk mastering display minimum luminance for [[Display-P3](#bib-display-p3)]:
+
+| Actual value | Stored Decimal values | Stored Hexadecimal values |
+|---|---|---|
+| 0.05 cd/m2 | 500 | 00 00 01 F4 |
 
 The four-byte chunk type field contains the hexadecimal values
 
@@ -1096,6 +1180,18 @@ The following specifies the syntax of the cLLI chunk:
 |---|---|---|
 | Maximum Content Light Level (MaxCLL) | 4 bytes | 0.0001 cd/m2 |
 | Maximum Frame-Average Light Level (MaxFALL) | 4 bytes | 0.0001 cd/m2 |
+
+Example cLLI chunk Maximum Content Light Level:
+
+| Actual value | Stored Decimal values | Stored Hexadecimal values |
+|---|---|---|
+| 1000 cd/m2 | 10000000 | 00 98 96 80 |
+
+Example cLLI chunk Maximum Frame-Average Light Level:
+
+| Actual value | Stored Decimal values | Stored Hexadecimal values |
+|---|---|---|
+| 250 cd/m2 | 2500000 | 00 26 25 A0 |
 
 PNG provides the [tEXt](#11tEXt), [iTXt](#11iTXt), and [zTXt](#11zTXt) chunks for storing text strings associated with the image, such as an image description or copyright notice. Keywords are used to indicate what each text string represents. Any number of such text chunks may appear, and more than one with the same keyword is permitted.
 

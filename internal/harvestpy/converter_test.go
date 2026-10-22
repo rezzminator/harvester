@@ -515,6 +515,20 @@ func TestHTMLConversionKeepsBlockStructure(t *testing.T) {
 			absent: []string{"Previous topic", "Built-in Exceptions"},
 		},
 		{
+			fixture: "content-examples.html",
+			blocks:  []string{"09 10 00 01", "09 12 00 01", "01 01 00 00", "0C 0D 00 01"},
+			text: []string{
+				"Full-range BT.2100 PQ uses this encoding:",
+				"Full-range BT.2100 HLG uses this encoding:",
+				"Narrow-range BT.709 uses this encoding:",
+				"Full-range Display-P3 uses this encoding:",
+				"Example mDCV chunk mastering display minimum luminance:",
+				"Example cLLI chunk Maximum Content Light Level:",
+				"Example cLLI chunk Maximum Frame-Average Light Level:",
+			},
+			absent: []string{"Subscribe to promotional updates", "_Converter gap:"},
+		},
+		{
 			// A Tildes comment header carries a collapsed-state excerpt of the
 			// comment's own first line, shown only when the thread is collapsed
 			// (stylesheet): written once, from the comment body.
@@ -640,7 +654,7 @@ func TestHTMLConversionKeepsBlockStructure(t *testing.T) {
 				"full = area(2, 3)\nprint(full)",
 				"area(1, 1)\narea(2, 2)",
 			},
-			contains: []string{"| badge | ![mark \\[old\\]](</img/mark (old).png>) shown beside the name |"},
+			contains: []string{"| badge | _Converter gap: Image badge has no web source_ ![mark \\[old\\]](</img/mark (old).png>) shown beside the name |"},
 			absent:   []string{"1 2 3 4", "ghost text", "teal", "track(", "base64", "Hidden series", "*shown here"},
 		},
 		{

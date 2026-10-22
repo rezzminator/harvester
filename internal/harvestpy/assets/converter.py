@@ -540,8 +540,8 @@ def _unwrap_table(table) -> None:
 # <aside class="footnote" role="doc-footnote">), and so is an article's own
 # footer written as prose — its correction note ("This article was amended
 # on …") — when no list, nav or form control sits in it and links are under
-# half its text. Each becomes a <div>; every other aside and footer (a
-# newsletter promotion, a share bar, the site footer) is cleaned as before.
+# half its text. These and explicitly marked examples inside article content
+# become <div>s; other asides and footers are cleaned as before.
 _NOTE_ROLES = frozenset({"doc-footnote", "doc-endnote", "doc-endnotes"})
 _NOTE_CLASSES = ("footnote", "endnote")
 _FOOTER_CONTROLS = ".//nav|.//ul|.//ol|.//form|.//button|.//input|.//select|.//textarea|.//iframe"
@@ -551,6 +551,10 @@ def _keep_notes(tree) -> None:
     for element in list(tree.iter("aside", "footer")):
         classes = (element.get("class") or "").casefold().split()
         if element.get("role") in _NOTE_ROLES or any(token.startswith(_NOTE_CLASSES) for token in classes):
+            element.tag = "div"
+        elif element.tag == "aside" and "example" in classes and any(
+            parent.tag in {"article", "main", "section"} for parent in element.iterancestors()
+        ):
             element.tag = "div"
         elif element.tag == "footer" and _is_article_note(element):
             element.tag = "div"
@@ -1035,6 +1039,7 @@ def _restore_line(line: str, islands: _Islands) -> list[str]:
 # _phrasing_paragraphs_as_text) writes whole, every space kept. A plain block
 # (div, section, article) is wrapped only when prose surrounds its links: a
 # breadcrumb or a row of links is navigation trafilatura already drops as a block.
+# Example captions also need this wrapping when their inline markup has no link.
 _RUN_CONTAINERS = ("li", "dt", "dd", "blockquote", "div", "section", "article")
 _BLOCK_PROSE_CHARS = 20
 
@@ -1044,7 +1049,11 @@ def _wrap_linked_runs(tree) -> None:
         children = list(item)
         if any(not isinstance(child.tag, str) for child in children):
             continue
-        if not any(child.tag in _PHRASING and (child.tag == "a" or child.find(".//a") is not None) for child in children):
+        example = item.tag == "div" and "example" in (item.get("class") or "").casefold().split()
+        if not any(
+            child.tag in _PHRASING and (example or child.tag == "a" or child.find(".//a") is not None)
+            for child in children
+        ):
             continue
         if item.tag in {"div", "section", "article"} and _prose_chars(item) < _BLOCK_PROSE_CHARS:
             continue

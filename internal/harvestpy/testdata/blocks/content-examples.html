@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html><head><title>Colour encodings</title></head><body>
+<main><section><h1>Colour encodings</h1>
+<p>The following examples specify the four bytes of the colour information chunk. Each example is part of this specification and provides an encoding that implementers can compare against their own output.</p>
+<aside class="example" id="pq"><p>Full-range BT.2100 PQ uses this encoding:</p><pre>09 10 00 01</pre></aside>
+<aside class="example" id="hlg"><p>Full-range BT.2100 HLG uses this encoding:</p><pre>09 12 00 01</pre></aside>
+<aside class="example" id="bt709"><p>Narrow-range BT.709 uses this encoding:</p><pre>01 01 00 00</pre></aside>
+<aside class="example" id="p3"><p>Full-range Display-P3 uses this encoding:</p><pre>0C 0D 00 01</pre></aside>
+<aside class="example"><div class="marker"><a href="#minimum">Example<bdi> 8</bdi></a></div>
+Example <span class="chunk">mDCV</span> chunk mastering display minimum luminance:
+<table><tr><th>Actual value</th><th>Stored value</th></tr><tr><td>0.0005 cd/m<sup>2</sup></td><td>5</td></tr></table></aside>
+<aside class="example"><div class="marker"><a href="#maxcll">Example<bdi> 13</bdi></a></div>
+Example <span class="chunk">cLLI</span> chunk Maximum Content Light Level:
+<table><tr><th>Actual value</th><th>Stored value</th></tr><tr><td>1000 cd/m<sup>2</sup></td><td>10000000</td></tr></table></aside>
+<aside class="example"><div class="marker"><a href="#maxfall">Example<bdi> 14</bdi></a></div>
+Example <span class="chunk">cLLI</span> chunk Maximum Frame-Average Light Level:
+<table><tr><th>Actual value</th><th>Stored value</th></tr><tr><td>250 cd/m<sup>2</sup></td><td>2500000</td></tr></table></aside>
+<aside class="newsletter"><p>Subscribe to promotional updates</p></aside>
+<p>Decoders use the colour information to interpret the image samples. The field order is significant, and each byte must retain the value shown in the corresponding example.</p>
+</section></main>
+</body></html>
