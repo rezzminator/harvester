@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -87,7 +88,7 @@ func TestLauncherVerifiesDownloadsAndPublishesStableBinary(t *testing.T) {
 
 func TestReleaseCheckRejectsVersionDrift(t *testing.T) {
 	root := t.TempDir()
-	for _, dir := range []string{"scripts", "plugins/harvester/.claude-plugin", "plugins/harvester/libexec"} {
+	for _, dir := range []string{"scripts", "plugins/harvester/.claude-plugin", "plugins/harvester/.codex-plugin", "plugins/harvester/libexec"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -100,7 +101,7 @@ func TestReleaseCheckRejectsVersionDrift(t *testing.T) {
 	if err := os.WriteFile(script, check, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "plugins/harvester/.claude-plugin/plugin.json"), []byte(`{"version":"0.1.0-dev.1"}`), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "plugins/harvester/.claude-plugin/plugin.json"), []byte(`{"version":"0.1.0-dev.1","mcpServers":{"harvester":{"type":"stdio","command":"${CLAUDE_PLUGIN_ROOT}/libexec/harvester","args":["mcp"]}}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	sums := ""
@@ -112,6 +113,12 @@ func TestReleaseCheckRejectsVersionDrift(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "plugins/harvester/libexec/SHA256SUMS"), []byte(sums), 0600); err != nil {
 		t.Fatal(err)
 	}
+	metadata := []string{"plugins/harvester/.codex-plugin/plugin.json", "plugins/harvester/package.json"}
+	for _, path := range metadata {
+		if err := os.WriteFile(filepath.Join(root, path), []byte(`{"version":"0.1.0-dev.1"}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	versionPath := filepath.Join(root, "VERSION")
 	if err := os.WriteFile(versionPath, []byte("0.1.0-dev.1\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -120,11 +127,81 @@ func TestReleaseCheckRejectsVersionDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("matching metadata err=%v output=%s", err, output)
 	}
+	for _, path := range metadata {
+		if err := os.WriteFile(filepath.Join(root, path), []byte(`{"version":"0.1.1"}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+		output, err = exec.Command("bash", script).CombinedOutput()
+		if err == nil || !strings.Contains(string(output), "VERSION and "+path+" disagree") {
+			t.Fatalf("engine version drift %s err=%v output=%s", path, err, output)
+		}
+		if err := os.WriteFile(filepath.Join(root, path), []byte(`{"version":"0.1.0-dev.1"}`), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := os.WriteFile(versionPath, []byte("0.1.1\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	output, err = exec.Command("bash", script).CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "VERSION and plugin.json disagree") {
 		t.Fatalf("drift err=%v output=%s", err, output)
+	}
+}
+
+func TestNativePluginRegistersHarvester(t *testing.T) {
+	body, err := os.ReadFile("../../plugins/harvester/.claude-plugin/plugin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		MCPServers map[string]struct {
+			Command string
+			Args    []string
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	server, ok := manifest.MCPServers["harvester"]
+	if !ok || server.Command != "${CLAUDE_PLUGIN_ROOT}/libexec/harvester" || len(server.Args) != 1 || server.Args[0] != "mcp" {
+		t.Fatalf("native plugin must register the standalone harvester MCP door: %#v", manifest.MCPServers)
+	}
+}
+
+func TestCodexPluginRegistersTheSharedLauncher(t *testing.T) {
+	body, err := os.ReadFile("../../plugins/harvester/.codex-plugin/plugin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		MCPServers string `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.MCPServers != "./mcp.json" {
+		t.Fatalf("Codex MCP declaration = %q", manifest.MCPServers)
+	}
+	body, err = os.ReadFile("../../plugins/harvester/mcp.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		MCPServers map[string]struct {
+			Command string
+			Args    []string
+			Cwd     string
+			EnvVars []string `json:"env_vars"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(body, &config); err != nil {
+		t.Fatal(err)
+	}
+	server, ok := config.MCPServers["harvester"]
+	if server.Cwd != "./" || !strings.Contains(strings.Join(server.EnvVars, " "), "HARVESTER_CONFIG") || !strings.Contains(strings.Join(server.EnvVars, " "), "XDG_STATE_HOME") {
+		t.Fatalf("Codex launcher must run from its plugin root and retain operator overrides: %#v", server)
+	}
+	if !ok || server.Command != "./libexec/harvester" || len(server.Args) != 1 || server.Args[0] != "mcp" {
+		t.Fatalf("Codex native plugin must register the shared launcher: %#v", config.MCPServers)
 	}
 }

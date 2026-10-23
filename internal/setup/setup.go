@@ -92,6 +92,14 @@ func run(ctx context.Context, cfg config.Runtime, offline bool, stdout io.Writer
 		case <-timer.C:
 		}
 	}
+	legacyRoot, err := legacyConfigRoot(home)
+	if err != nil {
+		return err
+	}
+	cfg, err = importLegacyConfig(cfg, legacyRoot, stdout)
+	if err != nil {
+		return fmt.Errorf("import legacy config: %w", err)
+	}
 	if !cfg.Config.Harvester.External.Enabled {
 		if err := ops.service(ctx, cfg); err != nil {
 			return fmt.Errorf("disable gateway service: %w", err)
@@ -142,12 +150,12 @@ func run(ctx context.Context, cfg config.Runtime, offline bool, stdout io.Writer
 	}
 	if cfg.Config.Harvester.Cache.Dir == "" {
 		for _, name := range []string{".harvester-cache", ".cache"} {
-			if err := migrate(filepath.Join(home, ".professor", name), paths.HarvesterCacheDir(home)); err != nil {
+			if err := migrate(filepath.Join(legacyRoot, name), paths.HarvesterCacheDir(home)); err != nil {
 				return fmt.Errorf("migrate cache %s: %w", name, err)
 			}
 		}
 		if cfg.Config.Harvester.External.StateDir == "" {
-			if err := migrate(filepath.Join(home, ".professor", ".harvester-state"), filepath.Join(state, ".harvester-state")); err != nil {
+			if err := migrate(filepath.Join(legacyRoot, ".harvester-state"), filepath.Join(state, ".harvester-state")); err != nil {
 				return fmt.Errorf("migrate gateway OAuth state: %w", err)
 			}
 		}

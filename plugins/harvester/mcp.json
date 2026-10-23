@@ -1,0 +1,31 @@
+{
+  "mcpServers": {
+    "harvester": {
+      "command": "./libexec/harvester",
+      "args": [
+        "mcp"
+      ],
+      "cwd": "./",
+      "env_vars": [
+        "HARVESTER_HOME",
+        "HARVESTER_RELEASE_BASE",
+        "HARVESTER_HOME_DIR",
+        "HARVESTER_CONFIG",
+        "HARVESTER_PYTHON_ROOT",
+        "XDG_CONFIG_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "HARVESTER_LOG_LEVEL",
+        "HARVESTER_LOG_COMPONENTS",
+        "HARVESTER_LOG_MIRROR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy"
+      ]
+    }
+  }
+}

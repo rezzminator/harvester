@@ -64,7 +64,7 @@ func TestSetupMigratesDefaultOAuthClientsAndRefreshTokens(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
 	response = httptest.NewRecorder()
 	remote.Handler().ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"name":"harvester-professor"`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"name":"harvester"`) {
 		t.Fatalf("renewed token failed MCP initialize: %d %s", response.Code, response.Body.String())
 	}
 }

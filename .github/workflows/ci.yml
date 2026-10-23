@@ -19,6 +19,13 @@ jobs:
           test -z "$unformatted" || { printf '%s\n' "$unformatted"; exit 1; }
       - name: build, vet and test
         run: go build ./... && go vet ./... && go test ./...
+      - name: daemon and retrieval races
+        run: CGO_ENABLED=1 go test -race ./internal/harvest ./internal/harvestmcp
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: OpenCode registration hook
+        run: node --test plugins/harvester/opencode.test.mjs
       - name: version and release assets
         run: scripts/release-check.sh
       - name: leak gate

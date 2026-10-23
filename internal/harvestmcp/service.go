@@ -152,7 +152,7 @@ func NewConfiguredHarvester(version string, runtime Runtime) (*Service, error) {
 		return nil, err
 	}
 	server := mcp.NewServer(
-		&mcp.Implementation{Name: "harvester-professor", Version: version},
+		&mcp.Implementation{Name: "harvester", Version: version},
 		&mcp.ServerOptions{
 			Instructions: serverInstructions(runtimeSearchEnabled(runtime), runtime.Remote),
 		},

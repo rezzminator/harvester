@@ -70,7 +70,7 @@ func TestStdioRecoversMalformedFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	line, err = reader.ReadString('\n')
-	if err != nil || !strings.Contains(line, `"name":"harvester-professor"`) {
+	if err != nil || !strings.Contains(line, `"name":"harvester"`) {
 		t.Fatalf("initialize response %q err=%v", line, err)
 	}
 	cancel()

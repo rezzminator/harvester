@@ -1,0 +1,12 @@
+{
+  "name": "harvester",
+  "owner": {
+    "name": "Harvester contributors"
+  },
+  "plugins": [
+    {
+      "name": "harvester",
+      "source": "./plugins/harvester"
+    }
+  ]
+}

@@ -9,7 +9,9 @@ root=pathlib.Path('.')
 manifest=json.loads((root/'plugins/harvester/.claude-plugin/plugin.json').read_text())
 version=(root/'VERSION').read_text().strip()
 assert version and version==manifest['version'], 'VERSION and plugin.json disagree'
-assert 'mcpServers' not in manifest, 'plugin.json must not register a duplicate MCP server'
+for path in ['plugins/harvester/.codex-plugin/plugin.json', 'plugins/harvester/package.json']:
+    assert json.loads((root/path).read_text())['version']==version, f'VERSION and {path} disagree'
+assert manifest.get('mcpServers', {}).get('harvester') == {'type':'stdio','command':'${CLAUDE_PLUGIN_ROOT}/libexec/harvester','args':['mcp']}, 'plugin.json must register the standalone harvester MCP door'
 assert re.fullmatch(r'[0-9A-Za-z._+-]+',version) and version not in ('.','..'), 'unsafe version'
 sums=(root/'plugins/harvester/libexec/SHA256SUMS').read_text().splitlines()
 expected={f'harvester_{version}_{os}_{arch}' for os in ['linux','darwin'] for arch in ['amd64','arm64']}

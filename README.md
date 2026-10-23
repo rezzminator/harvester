@@ -32,55 +32,79 @@ The `harvester` executable supports these entry points:
 - `harvester config path|show` prints the config path or effective Harvester
   settings; `harvester version` prints the binary version.
 
-The MCP tool names and schemas remain `read`, `search_web`,
-`search_literature`, and `download_file` under the `harvester-professor` server
-identity. Every client starts `harvester mcp` over stdio; this agent-facing
-proxy opens no listening port and connects to the per-user daemon over its
-private local endpoint. The daemon stays available after clients exit. A Claude
-marketplace plugin is an optional delivery and Claude integration path, not a
-prerequisite for the executable or MCP server.
+The MCP server is named `harvester` in Claude Code, Codex, and OpenCode. Its
+tools are `read`, `search_web`, `search_literature`, and `download_file`. Every
+engine starts the plugin's `libexec/harvester mcp` launcher over stdio; the
+launcher installs a checksum-verified binary on first use, and the proxy
+connects to the per-user daemon over its private local endpoint. The daemon
+stays available after clients exit.
+
+Engine clients expose those tools under these names:
+
+- **Claude Code:** `mcp__plugin_harvester_harvester__read`,
+  `mcp__plugin_harvester_harvester__search_web`,
+  `mcp__plugin_harvester_harvester__search_literature`,
+  `mcp__plugin_harvester_harvester__download_file`
+- **Codex:** `mcp__harvester__read`, `mcp__harvester__search_literature`,
+  `mcp__harvester__download_file`; `mcp__harvester__search_web` is available
+  when enabled in the Harvester config.
+- **OpenCode:** `harvester_read`, `harvester_search_web`,
+  `harvester_search_literature`, `harvester_download_file`
 
 ## Install and register
 
-Harvester works with Claude Code, Codex, and OpenCode, either alongside PFM or
-on its own. With PFM, enable `mcp.servers.harvester.enabled` and run `pfm install`;
-PFM provisions the standalone `~/.local/bin/harvester` executable and registers
-`harvester-professor` for the configured engine homes. This does
-not depend on installing Harvester from Claude's marketplace.
+Install the native plugin for each engine you use:
 
-For standalone use, build from an alpha checkout as shown below. When a stable
-release is available, install its platform asset after verifying it against
-the release's `SHA256SUMS`, then place it at `~/.local/bin/harvester`. Release
-assets are named `harvester_{version}_{os}_{arch}`.
+- **Claude Code:**
+
+  ```sh
+  claude plugin marketplace add rezzminator/harvester
+  claude plugin install harvester@harvester
+  ```
+
+- **Codex:**
+
+  ```sh
+  codex plugin marketplace add rezzminator/harvester
+  codex plugin add harvester@harvester
+  ```
+
+- **OpenCode:** clone the repository, then install its plugin directory:
+
+  ```sh
+  git clone https://github.com/rezzminator/harvester
+  cd harvester
+  opencode plugin --global "file://$PWD/plugins/harvester"
+  ```
+
+The Claude and Codex plugin marketplaces are listed at the repository root.
+OpenCode loads the packaged plugin's config hook, which registers `mcp.harvester`
+only when no explicit entry already exists. The plugin uses the same launcher
+and `harvester mcp` command on all engines.
+
+Codex registers MCP through `plugins/harvester/.codex-plugin/plugin.json`,
+which points to `plugins/harvester/mcp.json`. The MCP entry runs the contained
+`./libexec/harvester mcp` command with the installed plugin directory as its
+working directory and forwards the configured Harvester, XDG, logging, and
+proxy environment names.
+
+For an engine without the plugin, build or install the standalone executable
+and put `harvester` on `PATH`. To build from a checkout:
 
 ```sh
 go build -o "$HOME/.local/bin/harvester" ./cmd/harvester
 ```
 
-Ensure `~/.local/bin` exists and is on the account's PATH. Register that same
-binary as a local stdio server in each engine you use:
+Register it as a local stdio server with the engine's native command:
 
-- **Claude Code:** `claude mcp add --scope user harvester-professor -- "$HOME/.local/bin/harvester" mcp`
-- **Codex:** add to `~/.codex/config.toml`:
-
-  ```toml
-  [mcp_servers.harvester-professor]
-  command = "harvester"
-  args = ["mcp"]
-  env_vars = [
-    "HARVESTER_HOME_DIR", "HARVESTER_CONFIG", "HARVESTER_PYTHON_ROOT",
-    "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
-    "HARVESTER_LOG_LEVEL", "HARVESTER_LOG_COMPONENTS", "HARVESTER_LOG_MIRROR",
-    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
-  ]
-  ```
-
-- **OpenCode:** add to the user's `opencode.json` or `opencode.jsonc`:
+- **Claude Code:** `claude mcp add harvester -- harvester mcp`
+- **Codex:** `codex mcp add harvester -- harvester mcp`
+- **OpenCode:** add this entry to `opencode.json` or `opencode.jsonc`:
 
   ```json
   {
     "mcp": {
-      "harvester-professor": {
+      "harvester": {
         "type": "local",
         "command": ["harvester", "mcp"],
         "enabled": true
@@ -89,17 +113,10 @@ binary as a local stdio server in each engine you use:
   }
   ```
 
-These registrations resolve `harvester` from PATH (normally
-`~/.local/bin/harvester`) and invoke the same stdio proxy. To use the optional
-Claude plugin delivery, install it from a published Harvester marketplace
-listing when one is available; that route is not needed for PFM or standalone
-registrations.
-
-Codex `env_vars` forwards these variable names from the environment in which
-Codex starts; the config stores names, not host values. Export any Harvester,
+These manual registrations invoke the same stdio proxy. Export any Harvester,
 XDG, logging, or HTTP proxy settings the daemon should inherit before starting
-Codex. `HARVESTER_HOME` is intentionally omitted because it configures the
-optional plugin launcher, not the installed MCP binary.
+the engine. For a manual Codex entry in `config.toml`, list inherited variable
+names in `env_vars`; values come from Codex's environment.
 
 `harvester serve` is the persistent per-user daemon. It serves local MCP over
 the Unix socket `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/daemon.sock`
@@ -119,19 +136,20 @@ When `external.enabled` is set, the same daemon also serves the optional
 authenticated gateway at `127.0.0.1:18378` by default. `harvester setup` then
 installs a Harvester user service (systemd on Linux, LaunchAgent on macOS) so
 the gateway is available at login. With the external gateway disabled, setup
-installs no service unit; the stdio proxy starts the daemon when needed. This
-service is separate from PFM's chat-only MCP daemon.
+installs no service unit; the stdio proxy starts the daemon when needed.
+When installed through a native plugin, the service follows the plugin's stable
+binary link so plugin version updates take effect without replacing the
+service.
 
 ## Configuration and state
 
 The config path is `HARVESTER_CONFIG` when set, otherwise
 `${XDG_CONFIG_HOME:-$HOME/.config}/harvester/harvester.config.json`. Harvester
 keeps its conversion environment, ask state, cache, OAuth state, and logs under
-`${XDG_STATE_HOME:-$HOME/.local/state}/harvester/`. Setup migrates gateway OAuth
-state from `~/.professor/.harvester-state` to
-`${XDG_STATE_HOME:-$HOME/.local/state}/harvester/.harvester-state` only when
-both `cache.dir` and `external.stateDir` are unset; explicit locations remain
-unchanged. An explicit `cache.dir` remains the cache location.
+`${XDG_STATE_HOME:-$HOME/.local/state}/harvester/`. Setup can import Harvester
+settings and state from their legacy locations; an existing plugin config and
+explicit cache or gateway state paths remain in use. This import runs inside
+Harvester and does not require PFM to install or configure the plugin.
 
 Cross-filesystem migration verifies its copy and rescans for late writes; if the
 legacy directory is retained and setup warns, it uses extra disk space, so stop
@@ -142,7 +160,6 @@ legacy and destination entries for manual reconciliation.
 ## Development
 
 Run the build, vet, and test checks inside the project fence as described in
-[Testing](docs/testing.md). The nested `plugins/harvester/` directory contains
-the optional Claude plugin manifest and launcher; the launcher verifies
-release assets against `SHA256SUMS` and installs the versioned binary under
-`HARVESTER_HOME`.
+[Testing](docs/testing.md). `plugins/harvester/` contains the native manifests,
+OpenCode config hook, and launcher; the launcher verifies release assets
+against `SHA256SUMS` and installs the versioned binary under `HARVESTER_HOME`.

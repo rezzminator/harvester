@@ -100,7 +100,7 @@ func TestHarvesterExternalGatewayServesHarvesterBehindAuthOnly(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		server.Handler.ServeHTTP(recorder, request)
 		if token == "example-gateway-token" {
-			if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"name":"harvester-professor"`) {
+			if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"name":"harvester"`) {
 				t.Fatalf("authenticated: %d %s", recorder.Code, recorder.Body.String())
 			}
 		} else if recorder.Code != http.StatusUnauthorized {

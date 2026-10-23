@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,9 +14,14 @@ import (
 	"github.com/rezzminator/harvester/internal/config"
 	"github.com/rezzminator/harvester/internal/deps"
 	"github.com/rezzminator/harvester/internal/paths"
+	"github.com/rezzminator/harvester/internal/testjail"
 )
 
 func TestLinuxServiceInstallRefreshRemoveAndFailures(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	home := t.TempDir()
 	cfg := config.Runtime{Paths: paths.Values{Home: home}, Config: config.Config{Path: filepath.Join(home, "custom config.json"), Harvester: config.DefaultHarvester()}}
 	cfg.Config.Harvester.External.Enabled = true
@@ -29,7 +35,7 @@ func TestLinuxServiceInstallRefreshRemoveAndFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{filepath.Join(home, ".local/bin/harvester"), " serve", "HARVESTER_CONFIG=", "custom config.json", "Restart=on-failure"} {
+	for _, want := range []string{binary, " serve", "HARVESTER_CONFIG=", "custom config.json", "Restart=on-failure"} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("missing %s in %s", want, body)
 		}
@@ -277,5 +283,83 @@ func TestDarwinServiceDoesNotRestartSuccessfulStop(t *testing.T) {
 	}
 	if element := nextElement(); element.Name.Local != "false" {
 		t.Fatalf("SuccessfulExit=%s, want false", element.Name.Local)
+	}
+}
+
+func TestGatewayServiceUsesTheInvokedExecutable(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	t.Setenv("HARVESTER_HOME", filepath.Join(home, "custom plugin storage"))
+	cfg := config.Runtime{Paths: paths.Values{Home: home}, Config: config.Config{Harvester: config.DefaultHarvester()}}
+	for _, goos := range []string{"linux", "darwin"} {
+		_, body, err := serviceContent(cfg, goos)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(body), binary) {
+			t.Fatalf("%s service must launch the invoked executable %s, not assume a separate install: %s", goos, binary, body)
+		}
+	}
+}
+
+func TestGatewayServiceUsesPluginStableLink(t *testing.T) {
+	if stable := os.Getenv("HARVESTER_SERVICE_BINARY_HELPER"); stable != "" {
+		cfg := config.Runtime{Paths: paths.Values{Home: t.TempDir()}, Config: config.Config{Harvester: config.DefaultHarvester()}}
+		for _, goos := range []string{"linux", "darwin"} {
+			_, body, err := serviceContent(cfg, goos)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), stable) {
+				t.Fatalf("%s service must follow the native plugin stable link %s: %s", goos, stable, body)
+			}
+		}
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plugin := filepath.Join(t.TempDir(), "custom plugin storage")
+	versioned := filepath.Join(plugin, "bin", "v1", "harvester")
+	if err := os.MkdirAll(filepath.Dir(versioned), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := testjail.WriteExecutable(versioned, body, 0700); err != nil {
+		t.Fatal(err)
+	}
+	stable := filepath.Join(plugin, "bin", "harvester")
+	if err := os.Symlink(filepath.Join("v1", "harvester"), stable); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(versioned, "-test.run=^TestGatewayServiceUsesPluginStableLink$", "-test.v")
+	command.Env = append(os.Environ(), "HARVESTER_SERVICE_BINARY_HELPER="+stable)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("native plugin service: %v\n%s", err, output)
+	}
+	upgraded := filepath.Join(plugin, "bin", "v2", "harvester")
+	if err := os.MkdirAll(filepath.Dir(upgraded), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := testjail.WriteExecutable(upgraded, body, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(stable); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("v2", "harvester"), stable); err != nil {
+		t.Fatal(err)
+	}
+	command = exec.Command(stable, "-test.run=^TestGatewayServiceUsesPluginStableLink$", "-test.v")
+	command.Env = append(os.Environ(), "HARVESTER_SERVICE_BINARY_HELPER="+stable)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("upgraded native service: %v\n%s", err, output)
 	}
 }

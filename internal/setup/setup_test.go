@@ -23,6 +23,7 @@ func setupFixture(t *testing.T) (config.Runtime, string, string) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("PFM_CONFIG", "")
 	t.Setenv("PFM_HARVEST_ROOT", "")
 	t.Setenv("HARVESTER_PYTHON_ROOT", "")
 	cfg := config.Runtime{Paths: paths.Values{Home: home}, Config: config.Config{Harvester: config.DefaultHarvester()}}

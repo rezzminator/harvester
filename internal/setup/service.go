@@ -35,12 +35,28 @@ func unitQuote(value string) string {
 
 func serviceContent(cfg config.Runtime, goos string) (string, []byte, error) {
 	home := cfg.Paths.Home
-	binary := filepath.Join(home, ".local", "bin", "harvester")
+	binary, err := os.Executable()
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve gateway service executable: %w", err)
+	}
+	// Native plugins keep a stable link beside their versioned executable.
+	stable := filepath.Join(filepath.Dir(filepath.Dir(binary)), "harvester")
+	if linked, err := os.Stat(stable); err == nil {
+		invoked, err := os.Stat(binary)
+		if err != nil {
+			return "", nil, fmt.Errorf("inspect invoked gateway executable %s: %w", binary, err)
+		}
+		if os.SameFile(linked, invoked) {
+			binary = stable
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", nil, fmt.Errorf("inspect gateway executable link %s: %w", stable, err)
+	}
 	path := cfg.Config.Path
 	if path == "" {
 		path = config.Path(home)
 	}
-	for _, value := range []string{home, path} {
+	for _, value := range []string{home, path, binary} {
 		if strings.ContainsAny(value, "\x00\r\n") {
 			return "", nil, fmt.Errorf("service paths must not contain NUL or newlines")
 		}

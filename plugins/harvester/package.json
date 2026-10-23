@@ -1,0 +1,13 @@
+{
+  "name": "harvester-mcp",
+  "version": "0.1.0-dev.2",
+  "type": "module",
+  "main": "./opencode.js",
+  "exports": "./opencode.js",
+  "license": "MIT",
+  "files": [
+    "opencode.js",
+    "libexec",
+    ".claude-plugin/plugin.json"
+  ]
+}
