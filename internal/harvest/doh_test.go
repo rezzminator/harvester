@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -163,9 +164,9 @@ func TestDOHResolverTreatsNXDOMAINAsAuthoritative(t *testing.T) {
 // re-querying the resolver for every dial.
 func TestDOHResolverCachesWithinTTL(t *testing.T) {
 	t.Parallel()
-	queries := 0
+	var queries atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		queries++
+		queries.Add(1)
 		if r.URL.Query().Get("type") != "A" {
 			_, _ = w.Write([]byte(`{"Status":0,"Answer":[]}`))
 			return
@@ -181,8 +182,8 @@ func TestDOHResolverCachesWithinTTL(t *testing.T) {
 		}
 	}
 	// One A + one AAAA query for the first lookup; the rest come from cache.
-	if queries > 2 {
-		t.Fatalf("resolver queries = %d, want the TTL cache to serve repeat lookups", queries)
+	if queries.Load() > 2 {
+		t.Fatalf("resolver queries = %d, want the TTL cache to serve repeat lookups", queries.Load())
 	}
 }
 
@@ -192,9 +193,9 @@ func TestDOHResolverCachesWithinTTL(t *testing.T) {
 // expires time must be re-queried, not served stale.
 func TestDOHResolverRequeriesAfterTTLExpires(t *testing.T) {
 	t.Parallel()
-	queries := 0
+	var queries atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		queries++
+		queries.Add(1)
 		if r.URL.Query().Get("type") != "A" {
 			_, _ = w.Write([]byte(`{"Status":0,"Answer":[]}`))
 			return
@@ -215,7 +216,7 @@ func TestDOHResolverRequeriesAfterTTLExpires(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LookupIP error = %v", err)
 	}
-	if queries == 0 {
+	if queries.Load() == 0 {
 		t.Fatal("resolver queries = 0, want an expired cache entry to trigger a fresh query")
 	}
 	if len(ips) != 1 || ips[0].String() != "198.51.100.7" {
