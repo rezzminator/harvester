@@ -128,9 +128,7 @@ func TestWaveStatsWrittenByRealFetch(t *testing.T) {
 	// The scoreboard provably RUNS on the live dispatch path — an absent stats.jsonl
 	// after a real fetch means the recorder never fired (coincidence-detector failure).
 	dir := t.TempDir()
-	calls := 0
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		calls++
 		return response(r, http.StatusNotFound, "application/json", `{}`), nil
 	})}
 	h := mustNew(t, Options{

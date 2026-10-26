@@ -1,6 +1,6 @@
 {
   "name": "harvester-mcp",
-  "version": "0.1.0-dev.2",
+  "version": "0.1.0",
   "type": "module",
   "main": "./opencode.js",
   "exports": "./opencode.js",

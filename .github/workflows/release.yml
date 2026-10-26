@@ -1,11 +1,45 @@
 name: release
+
+# Releasing is merging the develop -> main pull request: its PR jobs run every
+# check (`make release-check` runs the same ones locally), and the merge tags
+# v{version} and publishes. No tag is pushed by hand.
 on:
-  push:
-    tags: ['v*']
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, closed]
+  workflow_dispatch:
+
 permissions:
-  contents: write
+  contents: read
+
 jobs:
+  check:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: format, build, vet, test, races, OpenCode registration hook, version and release assets
+        run: make check
+      - name: leak gate
+        env:
+          LEAK_TERMS_CONTENT: ${{ secrets.LEAK_TERMS }}
+        run: |
+          if test -n "$LEAK_TERMS_CONTENT"; then
+            printf '%s\n' "$LEAK_TERMS_CONTENT" > "$RUNNER_TEMP/leak-terms.txt"
+          else
+            printf '!structural-only\n' > "$RUNNER_TEMP/leak-terms.txt"
+          fi
+          LEAK_TERMS="$RUNNER_TEMP/leak-terms.txt" make leak
+
   release:
+    name: release
+    if: github.event_name == 'pull_request' && github.base_ref == 'main' && github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,15 +48,45 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: verify release input
+      - name: the version moved past main's, every version place agrees, the committed sums match a fresh build
+        run: make release
+
+  publish:
+    name: publish
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: the tag is new
         run: |
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-          test "${GITHUB_REF_NAME#v}" = "$(cat VERSION)"
-          go build ./... && go vet ./... && go test ./...
-          scripts/release-check.sh --release
+          version="$(cat VERSION)"
+          [ -n "$version" ] || { echo "::error::no version in VERSION"; exit 1; }
+          tag="v$version"
+          rc=0
+          git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::tag $tag already exists"
+            exit 1
+          elif [ "$rc" -ne 2 ]; then
+            echo "::error::could not look up tag $tag (git ls-remote exit $rc)"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
       - name: build assets
         run: scripts/build-release.sh
-      - name: publish tagged assets
+      - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/harvester_* dist/SHA256SUMS --title "harvester ${GITHUB_REF_NAME#v}" --generate-notes --verify-tag
+        run: |
+          gh release create "$TAG" dist/harvester_* dist/SHA256SUMS \
+            --target "${{ github.event.pull_request.merge_commit_sha }}" \
+            --title "harvester $VERSION" --generate-notes
