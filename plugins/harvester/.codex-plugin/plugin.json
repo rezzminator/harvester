@@ -1,6 +1,6 @@
 {
   "name": "harvester",
-  "version": "0.1.0-dev.2",
+  "version": "0.1.0",
   "description": "Retrieve web and document sources \u2014 read URLs, identifiers and files; search the web or literature; download originals; ask over sources. Returns content blocks and cached artifacts.",
   "license": "MIT",
   "repository": "https://github.com/rezzminator/harvester",
