@@ -58,15 +58,15 @@ Install the native plugin for each engine you use:
 - **Claude Code:**
 
   ```sh
-  claude plugin marketplace add rezzminator/harvester
-  claude plugin install harvester@harvester
+  claude plugin marketplace add rezzminator/professor
+  claude plugin install harvester@professor
   ```
 
 - **Codex:**
 
   ```sh
   codex plugin marketplace add rezzminator/harvester
-  codex plugin add harvester@harvester
+  codex plugin add harvester@professor
   ```
 
 - **OpenCode:** clone the repository, then install its plugin directory:
@@ -77,7 +77,8 @@ Install the native plugin for each engine you use:
   opencode plugin --global "file://$PWD/plugins/harvester"
   ```
 
-The Claude and Codex plugin marketplaces are listed at the repository root.
+The Claude plugin installs from Professor's marketplace; the Codex marketplace,
+named `professor`, is listed at the repository root.
 OpenCode loads the packaged plugin's config hook, which registers `mcp.harvester`
 only when no explicit entry already exists. The plugin uses the same launcher
 and `harvester mcp` command on all engines.
