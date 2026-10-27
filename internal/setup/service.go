@@ -16,6 +16,7 @@ import (
 	"github.com/rezzminator/harvester/internal/config"
 	"github.com/rezzminator/harvester/internal/daemon"
 	"github.com/rezzminator/harvester/internal/deps"
+	"github.com/rezzminator/harvester/internal/paths"
 )
 
 const serviceName = "harvester.service"
@@ -63,7 +64,7 @@ func serviceContent(cfg config.Runtime, goos string) (string, []byte, error) {
 	}
 	servicePath := filepath.Join(home, ".local", "bin") + ":/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin"
 	environment := [][2]string{{"HARVESTER_CONFIG", path}, {"PATH", servicePath}}
-	for _, name := range []string{"XDG_STATE_HOME", "XDG_CACHE_HOME", "HARVESTER_PYTHON_ROOT"} {
+	for _, name := range []string{"XDG_STATE_HOME", "XDG_CACHE_HOME", "HARVESTER_PYTHON_ROOT", paths.EnvPluginLogDir} {
 		if value := os.Getenv(name); value != "" {
 			if strings.ContainsAny(value, "\x00\r\n") {
 				return "", nil, fmt.Errorf("service environment %s contains NUL or newlines", name)

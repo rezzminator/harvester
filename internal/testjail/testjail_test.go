@@ -18,7 +18,7 @@ func TestRunSeparatesOperatorState(t *testing.T) {
 			t.Errorf("%s=%q", name, got)
 		}
 	}
-	for _, name := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "BASH_ENV", "HARVESTER_CONFIG", "HARVESTER_PYTHON_ROOT"} {
+	for _, name := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "BASH_ENV", "HARVESTER_CONFIG", "HARVESTER_PYTHON_ROOT", "PLUGIN_LOG_DIR"} {
 		if got := os.Getenv(name); got != "" {
 			t.Errorf("%s leaked %q", name, got)
 		}

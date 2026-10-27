@@ -9,6 +9,7 @@ func TestStateRootsRespectXDGAndKeepInstallHomeSeparate(t *testing.T) {
 	home := t.TempDir()
 	state := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", state)
+	t.Setenv("PLUGIN_LOG_DIR", "")
 	t.Setenv("HARVESTER_HOME", filepath.Join(home, "binaries"))
 	if got := StateRoot(home); got != filepath.Join(state, "harvester") {
 		t.Fatalf("state=%q", got)
@@ -24,5 +25,25 @@ func TestStateRootsRespectXDGAndKeepInstallHomeSeparate(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "")
 	if got := AskRoot(home); got != filepath.Join(home, ".local", "state", "harvester", "ask") {
 		t.Fatalf("ask=%q", got)
+	}
+}
+
+func TestLogDirIsPluginLogDirWhenSetElseTheStateLogs(t *testing.T) {
+	home, state, shared := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	t.Setenv("PLUGIN_LOG_DIR", shared)
+	if got := LogDir(home); got != filepath.Join(shared, "harvester") {
+		t.Fatalf("shared=%q", got)
+	}
+	if got := DaemonLog(home); got != filepath.Join(shared, "harvester", "daemon.log") {
+		t.Fatalf("daemon log=%q", got)
+	}
+	t.Setenv("PLUGIN_LOG_DIR", " ")
+	if got := LogDir(home); got != filepath.Join(state, "harvester", "logs") {
+		t.Fatalf("fallback=%q", got)
+	}
+	t.Setenv("XDG_STATE_HOME", "")
+	if got := LogDir(home); got != filepath.Join(home, ".local", "state", "harvester", "logs") {
+		t.Fatalf("home fallback=%q", got)
 	}
 }

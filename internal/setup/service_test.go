@@ -135,13 +135,14 @@ func TestServiceRetainsStateOverrides(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "custom state"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "uv cache"))
 	t.Setenv("HARVESTER_PYTHON_ROOT", filepath.Join(home, "custom python"))
+	t.Setenv("PLUGIN_LOG_DIR", filepath.Join(home, "shared logs"))
 	cfg := config.Runtime{Paths: paths.Values{Home: home}}
 	for _, goos := range []string{"linux", "darwin"} {
 		_, body, err := serviceContent(cfg, goos)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, name := range []string{"XDG_STATE_HOME", "XDG_CACHE_HOME", "HARVESTER_PYTHON_ROOT"} {
+		for _, name := range []string{"XDG_STATE_HOME", "XDG_CACHE_HOME", "HARVESTER_PYTHON_ROOT", "PLUGIN_LOG_DIR"} {
 			if !strings.Contains(string(body), name) || !strings.Contains(string(body), os.Getenv(name)) {
 				t.Fatalf("%s unit lost %s: %s", goos, name, body)
 			}

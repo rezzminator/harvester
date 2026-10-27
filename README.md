@@ -85,7 +85,7 @@ and `harvester mcp` command on all engines.
 Codex registers MCP through `plugins/harvester/.codex-plugin/plugin.json`,
 which points to `plugins/harvester/mcp.json`. The MCP entry runs the contained
 `./libexec/harvester mcp` command with the installed plugin directory as its
-working directory and forwards the configured Harvester, XDG, logging, and
+working directory and forwards the configured Harvester, XDG, logging (including `PLUGIN_LOG_DIR`), and
 proxy environment names.
 
 For an engine without the plugin, build or install the standalone executable
@@ -123,7 +123,7 @@ the Unix socket `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/daemon.sock`
 (mode `0600`) and owns retrieval, conversion, browser workers, and cache
 services. Its singleton lock is
 `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/daemon.lock` (mode `0600`);
-the daemon log is `.../harvester/logs/daemon.log` (mode `0600`). A proxy starts
+the daemon's captured output is `daemon.log` (mode `0600`) in the log directory described under Logging. A proxy starts
 it detached on demand; it remains running after clients exit. It checks the
 installed binary's version once per session and again on a daemon reconnect; it
 also rechecks a binary replaced during startup. An older proxy accepts a newer
@@ -145,11 +145,29 @@ service.
 
 The config path is `HARVESTER_CONFIG` when set, otherwise
 `${XDG_CONFIG_HOME:-$HOME/.config}/harvester/harvester.config.json`. Harvester
-keeps its conversion environment, ask state, cache, OAuth state, and logs under
+keeps its conversion environment, ask state, cache, and OAuth state under
 `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/`. Setup can import Harvester
 settings and state from their legacy locations; an existing plugin config and
 explicit cache or gateway state paths remain in use. This import runs inside
 Harvester and does not require PFM to install or configure the plugin.
+
+### Logging
+
+Harvester writes its activity log to `$PLUGIN_LOG_DIR/harvester/` when
+`PLUGIN_LOG_DIR` is set, otherwise to `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/logs/`;
+no Harvester variable or config key moves it, and the daemon's `daemon.log`
+sits beside the level files. The directory is `0700`. A record goes to
+`errors.jsonl`, `warnings.jsonl` or `info.jsonl` (`0600`) as one JSON row whose
+keys are `ts`, `plugin`, `level`, `event`, `msg`, `where`, `session` when known,
+and `detail`, at most 4096 bytes; the event is the record's message, `msg` its
+`err` field when it has one, `where` its component, and `detail` its other
+scrubbed fields. A debug record has no file of its own and lands in
+`info.jsonl` with `"level": "debug"`. A level file past 20 MiB moves to
+`{file}.1` and a `log-capped` row goes to `warnings.jsonl`. The screen shows an
+error as one line and, once per failing streak, that the log cannot be written;
+nothing else is printed. `HARVESTER_LOG_LEVEL` and `HARVESTER_LOG_COMPONENTS`
+still choose which records are written. A log left by an earlier version
+(`harvester.jsonl` and its `.lock`) is not read or removed.
 
 Cross-filesystem migration verifies its copy and rescans for late writes; if the
 legacy directory is retained and setup warns, it uses extra disk space, so stop
