@@ -11,7 +11,7 @@ import (
 	"github.com/rezzminator/harvester/internal/obs"
 )
 
-// Quora question pages (www.quora.com/<Question-slug>). Every rung pfm runs
+// Quora question pages (www.quora.com/<Question-slug>). Every rung harvester runs
 // itself — direct, chrome impersonation, the browser — is served Cloudflare's
 // challenge, on the page and on the same-host /graphql/gql_para_POST its
 // client pages the answer list through; the page's own relay state carries

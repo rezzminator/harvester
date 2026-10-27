@@ -143,14 +143,14 @@ func TestReadAskAnswersOverTheItems(t *testing.T) {
 			}
 			capture := filepath.Join(home, "engine-capture.txt")
 			binary := filepath.Join(home, "claude-fixture")
-			script := "#!/bin/sh\nprintf '%s|' \"$@\" > \"$PFM_ASK_CAPTURE\"\nprintf '\\n' >> \"$PFM_ASK_CAPTURE\"\n" +
-				"cat >> \"$PFM_ASK_CAPTURE\"\n" +
+			script := "#!/bin/sh\nprintf '%s|' \"$@\" > \"$ASK_CAPTURE\"\nprintf '\\n' >> \"$ASK_CAPTURE\"\n" +
+				"cat >> \"$ASK_CAPTURE\"\n" +
 				"cat " + paths.AskRoot(home) + "/run-*/source-*.json " +
-				">> \"$PFM_ASK_CAPTURE\" 2>/dev/null\n" + testCase.engine
+				">> \"$ASK_CAPTURE\" 2>/dev/null\n" + testCase.engine
 			if err := testjail.WriteExecutable(binary, []byte(script), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			t.Setenv("PFM_ASK_CAPTURE", capture)
+			t.Setenv("ASK_CAPTURE", capture)
 			machine := &config.Config{Claude: config.Claude{Binary: binary}, Codex: config.Codex{Binary: binary}, Ask: config.AskConfig{Prefs: map[engine.ID]config.EnginePrefs{engine.Codex: {Model: testCase.codexModel}}}}
 			if testCase.missingBinary {
 				machine.Claude.Binary = "/missing/claude"

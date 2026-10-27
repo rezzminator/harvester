@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	pfmconfig "github.com/rezzminator/harvester/internal/config"
-	pfmengine "github.com/rezzminator/harvester/internal/engine"
+	"github.com/rezzminator/harvester/internal/config"
+	"github.com/rezzminator/harvester/internal/engine"
 	"github.com/rezzminator/harvester/internal/paths"
 	"github.com/rezzminator/harvester/internal/testjail"
 )
@@ -20,48 +20,48 @@ import (
 func TestHarvestAskRunsBothConfiguredAdapters(t *testing.T) {
 	for _, testCase := range []struct {
 		name      string
-		engine    pfmengine.ID
+		engine    engine.ID
 		model     string
 		effort    string
 		flags     []string // the call's own flags, before the source
 		homeEnv   string
 		wantArgs  string
-		configure func(*pfmconfig.Config, string, string)
+		configure func(*config.Config, string, string)
 	}{
 		{
 			name:     "Claude",
-			engine:   pfmengine.Claude,
+			engine:   engine.Claude,
 			model:    "claude-fixture-model",
 			effort:   "low",
 			homeEnv:  "CLAUDE_CONFIG_DIR",
 			wantArgs: "-p|--model|claude-fixture-model|--effort|low|--output-format|json|",
-			configure: func(machine *pfmconfig.Config, binary, accountHome string) {
-				machine.Claude = pfmconfig.Claude{Binary: binary}
+			configure: func(machine *config.Config, binary, accountHome string) {
+				machine.Claude = config.Claude{Binary: binary}
 
 			},
 		},
 		{
 			name:     "Claude, an explicit alias as typed",
-			engine:   pfmengine.Claude,
+			engine:   engine.Claude,
 			model:    "claude-fixture-model",
 			effort:   "low",
 			flags:    []string{"--model", " Haiku"},
 			homeEnv:  "CLAUDE_CONFIG_DIR",
 			wantArgs: "-p|--model|haiku|--effort|low|--output-format|json|",
-			configure: func(machine *pfmconfig.Config, binary, accountHome string) {
-				machine.Claude = pfmconfig.Claude{Binary: binary}
+			configure: func(machine *config.Config, binary, accountHome string) {
+				machine.Claude = config.Claude{Binary: binary}
 
 			},
 		},
 		{
 			name:     "Codex",
-			engine:   pfmengine.Codex,
+			engine:   engine.Codex,
 			model:    "gpt-fixture-model",
 			effort:   "high",
 			homeEnv:  "CODEX_HOME",
 			wantArgs: "exec|--model|gpt-fixture-model|-c|model_reasoning_effort=\"high\"|--json|--ephemeral|--skip-git-repo-check|--color|never|",
-			configure: func(machine *pfmconfig.Config, binary, accountHome string) {
-				machine.Codex = pfmconfig.Codex{Binary: binary}
+			configure: func(machine *config.Config, binary, accountHome string) {
+				machine.Codex = config.Codex{Binary: binary}
 
 			},
 		},
@@ -80,29 +80,29 @@ func TestHarvestAskRunsBothConfiguredAdapters(t *testing.T) {
 			capture := filepath.Join(home, "ask-input.txt")
 			binary := filepath.Join(home, "ask-engine")
 			script := "#!/bin/sh\n" +
-				"printf 'home=%s\\n' \"${" + testCase.homeEnv + "-}\" > \"$PFM_ASK_CAPTURE\"\n" +
-				"printf 'args=' >> \"$PFM_ASK_CAPTURE\"\n" +
-				"printf '%s|' \"$@\" >> \"$PFM_ASK_CAPTURE\"\n" +
-				"printf '\\n' >> \"$PFM_ASK_CAPTURE\"\n" +
-				"cat >> \"$PFM_ASK_CAPTURE\"\n" +
+				"printf 'home=%s\\n' \"${" + testCase.homeEnv + "-}\" > \"$ASK_CAPTURE\"\n" +
+				"printf 'args=' >> \"$ASK_CAPTURE\"\n" +
+				"printf '%s|' \"$@\" >> \"$ASK_CAPTURE\"\n" +
+				"printf '\\n' >> \"$ASK_CAPTURE\"\n" +
+				"cat >> \"$ASK_CAPTURE\"\n" +
 				askJSONReply(testCase.engine, "fixture answer")
 			if err := testjail.WriteExecutable(binary, []byte(script), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			t.Setenv("PFM_ASK_CAPTURE", capture)
+			t.Setenv("ASK_CAPTURE", capture)
 
-			machine := pfmconfig.Config{
+			machine := config.Config{
 				Harvester: askHarvester(home),
-				Ask: pfmconfig.AskConfig{
+				Ask: config.AskConfig{
 					Engine: testCase.engine,
-					Prefs: map[pfmengine.ID]pfmconfig.EnginePrefs{
+					Prefs: map[engine.ID]config.EnginePrefs{
 						testCase.engine: {Model: testCase.model, Effort: testCase.effort},
 					},
 				},
 			}
 			testCase.configure(&machine, binary, accountHome)
 			t.Setenv(testCase.homeEnv, accountHome)
-			runtime := pfmconfig.Runtime{Config: machine, Paths: paths.Values{Home: home}}
+			runtime := config.Runtime{Config: machine, Paths: paths.Values{Home: home}}
 
 			var stdout, stderr bytes.Buffer
 			args := append(append([]string{"ask", "-p", "What is the fixture answer?"}, testCase.flags...), source)
@@ -158,13 +158,13 @@ esac
 			if err := os.MkdirAll(accountHome, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			machine := pfmconfig.Config{
-				Harvester: askHarvester(home), Claude: pfmconfig.Claude{Binary: binary},
-				Ask: pfmconfig.AskConfig{Engine: pfmengine.Claude},
+			machine := config.Config{
+				Harvester: askHarvester(home), Claude: config.Claude{Binary: binary},
+				Ask: config.AskConfig{Engine: engine.Claude},
 			}
 			var stdout, stderr bytes.Buffer
 			code := Harvest([]string{"ask", "--engine", "claude", "-p", "Q", source}, &stdout, &stderr,
-				pfmconfig.Runtime{Config: machine, Paths: paths.Values{Home: home}})
+				config.Runtime{Config: machine, Paths: paths.Values{Home: home}})
 			if code != 0 || stdout.String() != "fixture answer\n" ||
 				stderr.String() != test.want {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -189,24 +189,24 @@ func TestHarvestAskPreservesFailureReceiptsAndCleansThemUp(t *testing.T) {
 	fileCapture := filepath.Join(home, "prepared-files.txt")
 	binary := filepath.Join(home, "codex-fixture")
 	script := "#!/bin/sh\n" +
-		"cat > \"$PFM_ASK_PROMPT\"\n" +
-		"sed -n 's/^[0-9][0-9]*\\. \\(.*\\) — source:.*$/\\1/p' \"$PFM_ASK_PROMPT\" | while IFS= read -r prepared; do\n" +
-		"  printf '%s\\n' \"--- $prepared\" >> \"$PFM_ASK_FILES\"\n" +
-		"  cat \"$prepared\" >> \"$PFM_ASK_FILES\"\n" +
+		"cat > \"$ASK_PROMPT\"\n" +
+		"sed -n 's/^[0-9][0-9]*\\. \\(.*\\) — source:.*$/\\1/p' \"$ASK_PROMPT\" | while IFS= read -r prepared; do\n" +
+		"  printf '%s\\n' \"--- $prepared\" >> \"$ASK_FILES\"\n" +
+		"  cat \"$prepared\" >> \"$ASK_FILES\"\n" +
 		"done\n" +
-		askJSONReply(pfmengine.Codex, "receipt-aware answer")
+		askJSONReply(engine.Codex, "receipt-aware answer")
 	if err := testjail.WriteExecutable(binary, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PFM_ASK_PROMPT", promptCapture)
-	t.Setenv("PFM_ASK_FILES", fileCapture)
-	runtime := pfmconfig.Runtime{
-		Config: pfmconfig.Config{
+	t.Setenv("ASK_PROMPT", promptCapture)
+	t.Setenv("ASK_FILES", fileCapture)
+	runtime := config.Runtime{
+		Config: config.Config{
 			Harvester: askHarvester(home),
-			Codex:     pfmconfig.Codex{Binary: binary},
-			Ask: pfmconfig.AskConfig{
-				Engine: pfmengine.Codex,
-				Prefs:  map[pfmengine.ID]pfmconfig.EnginePrefs{pfmengine.Codex: {Model: "gpt-fixture", Effort: "low"}},
+			Codex:     config.Codex{Binary: binary},
+			Ask: config.AskConfig{
+				Engine: engine.Codex,
+				Prefs:  map[engine.ID]config.EnginePrefs{engine.Codex: {Model: "gpt-fixture", Effort: "low"}},
 			},
 		},
 		Paths: paths.Values{Home: home},
@@ -287,9 +287,9 @@ func TestHarvestAskValidatesBoundsBeforeEngineOrFetch(t *testing.T) {
 				testCase.args,
 				&stdout,
 				&stderr,
-				pfmconfig.Runtime{
+				config.Runtime{
 					Paths:  paths.Values{Home: home},
-					Config: pfmconfig.Config{Harvester: askHarvester(home), Ask: pfmconfig.AskConfig{Prefs: map[pfmengine.ID]pfmconfig.EnginePrefs{pfmengine.Claude: {Model: testCase.configuredModel}}}},
+					Config: config.Config{Harvester: askHarvester(home), Ask: config.AskConfig{Prefs: map[engine.ID]config.EnginePrefs{engine.Claude: {Model: testCase.configuredModel}}}},
 				},
 			); code != 2 {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -320,16 +320,16 @@ func TestHarvestAskAcceptsFiftySourcesAndFlagsAfterPositionals(t *testing.T) {
 	writeHarvestCodexAuth(t, accountHome)
 	promptCapture := filepath.Join(home, "prompt.txt")
 	binary := filepath.Join(home, "codex-fixture")
-	script := "#!/bin/sh\ncat > \"$PFM_ASK_PROMPT\"\n" + askJSONReply(pfmengine.Codex, "boundary answer")
+	script := "#!/bin/sh\ncat > \"$ASK_PROMPT\"\n" + askJSONReply(engine.Codex, "boundary answer")
 	if err := testjail.WriteExecutable(binary, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PFM_ASK_PROMPT", promptCapture)
-	runtime := pfmconfig.Runtime{
-		Config: pfmconfig.Config{
+	t.Setenv("ASK_PROMPT", promptCapture)
+	runtime := config.Runtime{
+		Config: config.Config{
 			Harvester: askHarvester(home),
-			Codex:     pfmconfig.Codex{Binary: binary},
-			Ask:       pfmconfig.AskConfig{Engine: pfmengine.Codex},
+			Codex:     config.Codex{Binary: binary},
+			Ask:       config.AskConfig{Engine: engine.Codex},
 		},
 		Paths: paths.Values{Home: home},
 	}
@@ -367,11 +367,11 @@ func TestHarvestAskCleansFailureReceiptsWhenEngineFails(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	runtime := pfmconfig.Runtime{
-		Config: pfmconfig.Config{
+	runtime := config.Runtime{
+		Config: config.Config{
 			Harvester: askHarvester(home),
-			Codex:     pfmconfig.Codex{Binary: binary},
-			Ask:       pfmconfig.AskConfig{Engine: pfmengine.Codex},
+			Codex:     config.Codex{Binary: binary},
+			Ask:       config.AskConfig{Engine: engine.Codex},
 		},
 		Paths: paths.Values{Home: home},
 	}
@@ -398,8 +398,8 @@ func TestHarvestAskCleansFailureReceiptsWhenEngineFails(t *testing.T) {
 	}
 }
 
-func askJSONReply(engine pfmengine.ID, answer string) string {
-	if engine == pfmengine.Claude {
+func askJSONReply(id engine.ID, answer string) string {
+	if id == engine.Claude {
 		return "printf '%s\\n' '{\"result\":" + strconv.Quote(answer) + "}'\n"
 	}
 	return "printf '%s\\n' '{\"type\":\"thread.started\"}' '{\"type\":\"turn.started\"}' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":" + strconv.Quote(
@@ -419,7 +419,7 @@ func TestPlainHarvestJSONRemainsBackwardCompatible(t *testing.T) {
 		[]string{source, "--json"},
 		&stdout,
 		&stderr,
-		pfmconfig.Runtime{Paths: paths.Values{Home: home}, Config: pfmconfig.Config{Harvester: askHarvester(home)}},
+		config.Runtime{Paths: paths.Values{Home: home}, Config: config.Config{Harvester: askHarvester(home)}},
 	); code != 0 {
 		t.Fatalf("plain harvest code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
@@ -443,8 +443,8 @@ func TestPlainHarvestJSONRemainsBackwardCompatible(t *testing.T) {
 // askHarvester is the harvester config these CLI tests run under: the
 // defaults with the cache pointed into the test home (the config key that
 // replaced WEBFETCH_DIR).
-func askHarvester(home string) pfmconfig.HarvesterConfig {
-	harvester := pfmconfig.DefaultHarvester()
+func askHarvester(home string) config.HarvesterConfig {
+	harvester := config.DefaultHarvester()
 	harvester.Cache.Dir = filepath.Join(home, "cache")
 	return harvester
 }

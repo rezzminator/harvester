@@ -25,8 +25,8 @@ The `harvester` executable supports these entry points:
   per-user `harvester serve` daemon.
 - `harvester serve` hosts the persistent Harvester services and optional
   authenticated external MCP gateway.
-- `harvester setup [--offline]` provisions conversion support and migrates
-  legacy Harvester state.
+- `harvester setup [--offline]` provisions conversion support and refreshes the
+  daemon.
 - `harvester doctor [--json] [--skip-conversion]` checks Harvester's runtime
   and services.
 - `harvester config path|show` prints the config path or effective Harvester
@@ -146,16 +146,8 @@ service.
 The config path is `HARVESTER_CONFIG` when set, otherwise
 `${XDG_CONFIG_HOME:-$HOME/.config}/harvester/harvester.config.json`. Harvester
 keeps its conversion environment, ask state, cache, OAuth state, and logs under
-`${XDG_STATE_HOME:-$HOME/.local/state}/harvester/`. Setup can import Harvester
-settings and state from their legacy locations; an existing plugin config and
-explicit cache or gateway state paths remain in use. This import runs inside
-Harvester and does not require PFM to install or configure the plugin.
-
-Cross-filesystem migration verifies its copy and rescans for late writes; if the
-legacy directory is retained and setup warns, it uses extra disk space, so stop
-legacy writers and reconcile retained files before removing it manually. A
-destination conflict never overwrites the published entry; setup retains the
-legacy and destination entries for manual reconciliation.
+`${XDG_STATE_HOME:-$HOME/.local/state}/harvester/`; explicit cache or gateway
+state paths in the config remain in use.
 
 ## Development
 

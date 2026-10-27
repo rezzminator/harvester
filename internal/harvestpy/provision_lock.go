@@ -17,7 +17,7 @@ import (
 // roots serialize independently — they never share a directory.
 const provisionLockName = ".provision.lock"
 
-// lockProvisionRoot takes an exclusive advisory lock on root, so two pfm
+// lockProvisionRoot takes an exclusive advisory lock on root, so two harvester
 // processes never converge the same environment tree at once: the browser
 // provisioner rebuilds a digest directory a live worker may be executing out
 // of, and the conversion provisioner quarantines and restores one. The lock

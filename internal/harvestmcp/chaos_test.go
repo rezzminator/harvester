@@ -559,7 +559,7 @@ func lineAfter(block, prefix string) string {
 	return ""
 }
 
-// chaosAskMachine is a pfm config whose Claude is a fake engine: it reads the
+// chaosAskMachine is a harvester config whose Claude is a fake engine: it reads the
 // artifacts its prompt lists and answers the markers they carry.
 func chaosAskMachine(t *testing.T, home string) *config.Config {
 	t.Helper()

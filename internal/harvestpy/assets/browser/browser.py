@@ -98,9 +98,9 @@ def chrome_binary():
 
 # macOS attributes a process's TCC requests to its "responsible process", the
 # one that started the chain: Chrome launched by this worker is blamed on the
-# `pfm` binary at the top of it, and tccd refuses Chrome's touch of its own app
-# bundle (kTCCServiceSystemPolicyAppBundles) as pfm modifying apps on the Mac
-# — a notification on every launch, and no grant survives pfm's ad-hoc
+# `harvester` binary at the top of it, and tccd refuses Chrome's touch of its own
+# app bundle (kTCCServiceSystemPolicyAppBundles) as harvester modifying apps on
+# the Mac — a notification on every launch, and no grant survives harvester's ad-hoc
 # signature changing on a rebuild. A process spawned with responsibility
 # DISCLAIMED is its own responsible process. Playwright spawns Chrome with
 # node's spawn, which cannot set that attribute, so on darwin it spawns a
@@ -335,7 +335,7 @@ def chrome_launcher(platform=None):
     if (platform or sys.platform) != "darwin" or not (os.path.isfile(chrome) and os.access(chrome, os.X_OK)):
         yield _NoLauncher()
         return
-    directory = tempfile.mkdtemp(prefix="pfm-chrome-launcher-")
+    directory = tempfile.mkdtemp(prefix="harvester-chrome-launcher-")
     try:
         yield ChromeLauncher(directory, chrome)
     finally:

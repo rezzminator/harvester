@@ -49,8 +49,8 @@ type FindSource struct {
 }
 
 // FindOutput is what one search_literature call found: the candidates and
-// every source's status. The tool answers it as text (RenderFind); pfm
-// harvest search --json prints it.
+// every source's status. The tool answers it as text (RenderFind); `harvester
+// search --json` prints it.
 type FindOutput struct {
 	Candidates []WorkCandidate `json:"candidates"`
 	Sources    []FindSource    `json:"sources"`
@@ -66,8 +66,8 @@ func (service *Service) searchLiteratureTool(
 	return textResult(RenderFind(input.Query, found), false), nil, nil
 }
 
-// SearchLiterature runs one search_literature query: the tool's and pfm
-// harvest search's one search. An error is a refused input, every source
+// SearchLiterature runs one search_literature query: the tool's and `harvester
+// search`'s one search. An error is a refused input, every source
 // failing, or the candidates' handles not being storable.
 func (service *Service) SearchLiterature(ctx context.Context, input FindInput) (FindOutput, error) {
 	if strings.TrimSpace(input.Query) == "" {

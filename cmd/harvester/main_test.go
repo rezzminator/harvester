@@ -107,7 +107,7 @@ func TestHarvesterExternalGatewayServesHarvesterBehindAuthOnly(t *testing.T) {
 			t.Fatalf("token %q: %d", token, recorder.Code)
 		}
 	}
-	for _, path := range []string{"/mcp/chat-professor", "/mcp/harvester-professor", "/status"} {
+	for _, path := range []string{"/mcp/chat", "/mcp/docs", "/status"} {
 		r := httptest.NewRequest(http.MethodGet, "https://harvester.example.test"+path, http.NoBody)
 		r.Header.Set("Authorization", "Bearer example-gateway-token")
 		w := httptest.NewRecorder()

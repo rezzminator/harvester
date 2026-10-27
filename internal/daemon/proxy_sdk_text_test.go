@@ -14,7 +14,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// TestProxySessionLostIsOnlyTheSDKSessionText pins pfm-update-6#F5: a 404
+// TestProxySessionLostIsOnlyTheSDKSessionText pins that a 404
 // whose body merely mentions "session" is the daemon refusing the request,
 // never a lost session — recovery (re-initialize and retry) keys off the
 // go-sdk's own session-loss texts only.
@@ -39,7 +39,7 @@ func TestProxySessionLostIsOnlyTheSDKSessionText(t *testing.T) {
 	}
 }
 
-// TestProxyRecoveryTextsMatchTheGoSDK pins pfm-update-6#F6: the proxy's
+// TestProxyRecoveryTextsMatchTheGoSDK pins that the proxy's
 // recovery reads two go-sdk texts, and this test drives the real sdk so a
 // changed text fails here, not silently in a proxy that stops recovering.
 func TestProxyRecoveryTextsMatchTheGoSDK(t *testing.T) {

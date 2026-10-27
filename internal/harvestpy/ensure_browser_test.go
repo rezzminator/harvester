@@ -49,13 +49,13 @@ func countingProvision(t *testing.T) *int {
 }
 
 // TestEnsureBrowserReprovisionsAWorkerFromAnOlderPfm pins the upgrade gap:
-// an environment an older pfm provisioned still has its interpreter, so the
+// an environment an older harvester provisioned still has its interpreter, so the
 // "missing interpreter" check alone kept running the OLD browser.py — a
 // changed worker protocol shipped and silently never ran.
 func TestEnsureBrowserReprovisionsAWorkerFromAnOlderPfm(t *testing.T) {
 	root := t.TempDir()
 	calls := countingProvision(t)
-	writeBrowserEnv(t, root, "worker-from-an-older-pfm", browserLockSHA256())
+	writeBrowserEnv(t, root, "worker-from-an-older-harvester", browserLockSHA256())
 	if _, err := EnsureBrowser(context.Background(), ProvisionOptions{Root: root}); err != nil {
 		t.Fatalf("EnsureBrowser: %v", err)
 	}

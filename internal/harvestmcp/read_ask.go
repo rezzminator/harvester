@@ -11,7 +11,7 @@ import (
 
 	"github.com/rezzminator/harvester/internal/ask"
 	"github.com/rezzminator/harvester/internal/config"
-	pfmengine "github.com/rezzminator/harvester/internal/engine"
+	"github.com/rezzminator/harvester/internal/engine"
 	"github.com/rezzminator/harvester/internal/harvest"
 	"github.com/rezzminator/harvester/internal/paths"
 )
@@ -41,7 +41,7 @@ const askReceiptStatus = "unavailable"
 // resolved before any item is read.
 type readAsk struct {
 	question string
-	engine   pfmengine.ID
+	engine   engine.ID
 	model    string // "" leaves the engine's configured ask model to ask.ResolveInput
 	runner   ask.Engine
 	machine  config.Config
@@ -69,34 +69,34 @@ func (service *Service) parseAsk(input ReadInput) (*readAsk, error) {
 		)
 	}
 	machine := *service.runtime.Machine
-	engine := pfmengine.Claude
+	id := engine.Claude
 	if input.Engine != "" {
-		parsed, err := pfmengine.Parse(input.Engine)
+		parsed, err := engine.Parse(input.Engine)
 		if err != nil {
 			return nil, fmt.Errorf("engine: %w", err)
 		}
-		engine = parsed
+		id = parsed
 	}
 	model := strings.TrimSpace(input.Model)
 	if model == "" {
-		if engine == pfmengine.Claude {
+		if id == engine.Claude {
 			model = defaultAskModel
 		} else {
-			model = machine.Ask.PrefsFor(engine).Model
+			model = machine.Ask.PrefsFor(id).Model
 		}
 	}
 	if model != "" {
 		var err error
-		model, err = ask.CheckModel(engine, model)
+		model, err = ask.CheckModel(id, model)
 		if err != nil {
 			return nil, err
 		}
 	}
-	runner, err := ask.ResolveEngine(engine, machine)
+	runner, err := ask.ResolveEngine(id, machine)
 	if err != nil {
-		return nil, fmt.Errorf("engine %s: %w", pfmengine.MustLookup(engine).LongName, err)
+		return nil, fmt.Errorf("engine %s: %w", engine.MustLookup(id).LongName, err)
 	}
-	return &readAsk{question: input.Ask, engine: engine, model: model, runner: runner, machine: machine}, nil
+	return &readAsk{question: input.Ask, engine: id, model: model, runner: runner, machine: machine}, nil
 }
 
 // answerBlock is the answer to question over the call's items: its header,
@@ -106,7 +106,7 @@ func (service *Service) parseAsk(input ReadInput) (*readAsk, error) {
 func (service *Service) answerBlock(
 	ctx context.Context, question *readAsk, sources []string, results []harvest.Result, failed []bool,
 ) (string, bool) {
-	header := strings.TrimSpace(fmt.Sprintf("=== answer (%s %s", pfmengine.MustLookup(question.engine).LongName,
+	header := strings.TrimSpace(fmt.Sprintf("=== answer (%s %s", engine.MustLookup(question.engine).LongName,
 		question.model)) + ")"
 	asked := false
 	for _, itemFailed := range failed {

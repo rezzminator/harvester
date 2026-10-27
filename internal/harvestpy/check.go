@@ -114,7 +114,7 @@ func evaluateConversionEnvironment(
 		set("lock_hash", VerifySHA256(filepath.Join(current, "project", "uv.lock"), digest.LockSHA256))
 		set("source_hash", VerifySHA256(filepath.Join(current, "project", "converter.py"), digest.SourceSHA256))
 		// source_hash proves the record and the on-disk worker agree with
-		// each other; source_current proves they are THIS pfm's. An upgrade
+		// each other; source_current proves they are THIS harvester's. An upgrade
 		// leaves an older environment fully self-consistent, and without this
 		// comparison the installer's Check fast-path keeps the old
 		// converter.py in service under a binary that embeds a new one.

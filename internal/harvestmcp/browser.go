@@ -218,7 +218,7 @@ func (converter pythonConverter) browserProxy(ctx context.Context) (string, func
 }
 
 // browserRuntime resolves the browser worker's runtime, provisioning it first
-// when it is missing or was provisioned by an older pfm (harvestpy.EnsureBrowser).
+// when it is missing or was provisioned by an older harvester (harvestpy.EnsureBrowser).
 func (converter pythonConverter) browserRuntime(ctx context.Context) (harvestpy.Runtime, error) {
 	return harvestpy.EnsureBrowser(ctx, harvestpy.ProvisionOptions{
 		Root:   converter.browserRoot,
