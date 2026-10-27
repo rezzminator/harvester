@@ -208,7 +208,6 @@ func (h *Harvester) exportResult(source, field string, result Result, sizeOnly b
 
 	out.Chars = contentChars(body)
 	out.ContentChars = out.Chars
-	out.Tokens = EstimateTokens(body)
 	out.Content = truncateInline(body, h.options.MaxInlineChars)
 	if sizeOnly {
 		out.Content = ""
@@ -284,15 +283,14 @@ func (h *Harvester) publicFrontmatter(
 		fetchedAt = stored["fetched_at"]
 	}
 	fields := map[string]string{
-		keySource:     frontmatterSourceHarvester,
-		keyRequest:    PublicSourceLabel(source),
-		"field":       field,
-		keyKind:       out.Kind,
-		"via":         out.Method,
-		"fetched_at":  fetchedAt,
-		"chars":       strconv.Itoa(contentChars(body)),
-		"token_count": strconv.Itoa(EstimateTokens(body)),
-		"gaps":        out.Partial,
+		keySource:    frontmatterSourceHarvester,
+		keyRequest:   PublicSourceLabel(source),
+		"field":      field,
+		keyKind:      out.Kind,
+		"via":        out.Method,
+		"fetched_at": fetchedAt,
+		"chars":      strconv.Itoa(contentChars(body)),
+		"gaps":       out.Partial,
 	}
 	if out.HTTPStatus > 0 {
 		fields["http_status"] = strconv.Itoa(out.HTTPStatus)

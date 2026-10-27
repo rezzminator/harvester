@@ -143,9 +143,9 @@ func TestFetchSizeOnlyLeaderSharesTheWholePage(t *testing.T) {
 			full.Content,
 		)
 	}
-	if sized.Error != "" || sized.Content != "" || sized.Tokens == 0 {
-		t.Fatalf("size-only leader answered error=%q content=%d chars tokens=%d; want its size alone",
-			sized.Error, len(sized.Content), sized.Tokens)
+	if sized.Error != "" || sized.Content != "" || sized.Chars == 0 {
+		t.Fatalf("size-only leader answered error=%q content=%d chars, size %d chars; want its size alone",
+			sized.Error, len(sized.Content), sized.Chars)
 	}
 }
 

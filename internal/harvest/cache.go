@@ -142,7 +142,6 @@ func (c *Cache) save(
 	fields["rungs"] = strings.Join(rungs, ", ")
 	fields["fetched_at"] = c.clock.Now().UTC().Format(time.RFC3339)
 	fields["chars"] = strconv.Itoa(contentChars(body))
-	fields["token_count"] = strconv.Itoa(EstimateTokens(body))
 	if status > 0 {
 		fields["http_status"] = strconv.Itoa(status)
 	}
@@ -172,67 +171,6 @@ func (c *Cache) save(
 		return path, fmt.Errorf("install cache: %w", err)
 	}
 	return path, nil
-}
-
-func EstimateTokens(text string) int {
-	if text == "" {
-		return 0
-	}
-	// Weighted by share, not by the presence of one character: CJK/kana/Hangul
-	// runes cost 1.3x each; the REMAINING (non-CJK) runes cost 1/1.8 when
-	// symbols are >=5% of THOSE runes (code), else 1/2 (prose) - always
-	// rounded up. A pure-CJK, pure-prose or pure-code text reduces to its
-	// old whole-text rate exactly; only mixed text changes.
-	runes := []rune(text)
-	cjk := 0
-	symbols := 0
-	for _, r := range runes {
-		if (r >= 0x3040 && r <= 0x30ff) || (r >= 0x3400 && r <= 0x9fff) || (r >= 0xf900 && r <= 0xfaff) ||
-			(r >= 0xac00 && r <= 0xd7af) ||
-			(r >= 0xff00 && r <= 0xffef) {
-			cjk++
-			continue
-		}
-		switch r {
-		case '{',
-			'}',
-			'[',
-			']',
-			'(',
-			')',
-			'<',
-			'>',
-			';',
-			'=',
-			'+',
-			'-',
-			'*',
-			'/',
-			'\\',
-			'|',
-			'&',
-			'^',
-			'%',
-			'$',
-			'#',
-			'@',
-			'~',
-			'`',
-			'_':
-			symbols++
-		}
-	}
-	n := len(runes)
-	nonCJK := n - cjk
-	total := float64(cjk) * 1.3
-	if nonCJK > 0 {
-		if float64(symbols)/float64(nonCJK) >= 0.05 {
-			total += float64(nonCJK) / 1.8
-		} else {
-			total += float64(nonCJK) / 2
-		}
-	}
-	return int(total + 0.999999)
 }
 
 // InlineTruncationNote ends inline content truncateInline cut short; a

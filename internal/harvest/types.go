@@ -337,7 +337,6 @@ type Result struct {
 	Bytes        int64    `json:"bytes,omitempty"`
 	Chars        int      `json:"chars,omitempty"`
 	ContentChars int      `json:"content_chars,omitempty"`
-	Tokens       int      `json:"tokens,omitempty"`
 	Rungs        []string `json:"rungs,omitempty"`
 	Error        string   `json:"error,omitempty"`
 	ErrorKind    string   `json:"error_kind,omitempty"`

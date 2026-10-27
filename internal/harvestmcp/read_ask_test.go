@@ -17,7 +17,7 @@ import (
 // askFixturePage is the cached page every ask case reads.
 const askFixturePage = "https://example.test/ask"
 
-var askSizeLine = regexp.MustCompile(`size: \d+ chars, ~\d+ tokens`)
+var askSizeLine = regexp.MustCompile(`size: \d+ chars`)
 
 // TestReadAskAnswersOverTheItems: read{ask} asks one question over
 // the call's items through a fake Claude binary — defaults claude + haiku,

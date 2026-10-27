@@ -27,7 +27,7 @@ func harvestLocal(t *testing.T, args ...string) (int, string, string) {
 // read tool's block — its header, its artifact's path, then the content, or
 // with --include-content=false the size line in place of the body.
 func TestHarvestPrintsTheReadToolsBlock(t *testing.T) {
-	sizeLine := regexp.MustCompile(`^size: 18 chars, ~\d+ tokens$`)
+	sizeLine := regexp.MustCompile(`^size: 18 chars$`)
 	for _, test := range []struct {
 		name string
 		args []string
