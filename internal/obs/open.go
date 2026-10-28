@@ -121,7 +121,7 @@ func OpenLog(ctx context.Context, settings Settings) (context.Context, func(exit
 // directory (§ Logging). The destination takes every level — levelHandler in front of it owns the control
 // — and applies Scrub last. A directory that cannot be resolved returns the discarding handler AND the
 // reason — the caller reports it, so a log nobody can write never reads as a quiet one. A directory that
-// cannot be written is reported by levelFiles itself, once per failing streak.
+// cannot be written is reported by the plugin-log library itself, once per failing streak.
 func openDestination(settings Settings, stderr io.Writer) (slog.Handler, error) {
 	dir := settings.Dir
 	if dir == "" {
@@ -132,7 +132,7 @@ func openDestination(settings Settings, stderr io.Writer) (slog.Handler, error) 
 		dir = resolved.LogDir
 	}
 	options := &slog.HandlerOptions{Level: slog.LevelDebug, ReplaceAttr: Scrub}
-	return slog.NewJSONHandler(&levelFiles{dir: dir, stderr: stderr}, options), nil
+	return slog.NewJSONHandler(newLogRows(dir, stderr), options), nil
 }
 
 // discardHandler drops every record: the destination before OpenLog, and the

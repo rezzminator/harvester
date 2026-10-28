@@ -173,15 +173,16 @@ Harvester writes its activity log to `$PLUGIN_LOG_DIR/harvester/` when
 `PLUGIN_LOG_DIR` is set, otherwise to `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/logs/`;
 no Harvester variable or config key moves it, and the daemon's `daemon.log`
 sits beside the level files. The directory is `0700`. A record goes to
-`errors.jsonl`, `warnings.jsonl` or `info.jsonl` (`0600`) as one JSON row whose
-keys are `ts`, `plugin`, `level`, `event`, `msg`, `where`, `session` when known,
-and `detail`, at most 4096 bytes; the event is the record's message, `msg` its
-`err` field when it has one, `where` its component, and `detail` its other
-scrubbed fields. A debug record has no file of its own and lands in
-`info.jsonl` with `"level": "debug"`. A level file past 20 MiB moves to
-`{file}.1` and a `log-capped` row goes to `warnings.jsonl`. The screen shows an
-error as one line and, once per failing streak, that the log cannot be written;
-nothing else is printed. `HARVESTER_LOG_LEVEL` and `HARVESTER_LOG_COMPONENTS`
+`errors.jsonl`, `warnings.jsonl`, `info.jsonl` or `debug.jsonl` (`0600`) as one
+JSON row whose keys are `ts`, `plugin`, `level`, `event`, `msg`, `where`,
+`session` when known, and `detail`, at most 4096 bytes; the event is the
+record's message, `msg` its `err` field when it has one, `where` its component
+(else its command), and `detail` its other scrubbed fields. A level file past
+20 MiB moves to `{file}.1`, older generations shifting up to `{file}.5`, and a
+`log-capped` row goes to `warnings.jsonl`. A row that cannot be written is held
+for the next write, which writes it first. The screen shows an error as one
+line and, once per failing streak, that the log cannot be written and how many
+rows are held; nothing else is printed. `HARVESTER_LOG_LEVEL` and `HARVESTER_LOG_COMPONENTS`
 still choose which records are written. A log left by an earlier version
 (`harvester.jsonl` and its `.lock`) is not read or removed.
 

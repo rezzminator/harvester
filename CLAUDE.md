@@ -12,7 +12,7 @@ Cached handles and external gateway credentials outlive one process: migration c
 - ask: source questions through Claude or Codex executables · `internal/ask/`, `internal/engine/`
 - configuration: `$HARVESTER_CONFIG`, else `${XDG_CONFIG_HOME:-$HOME/.config}/harvester/harvester.config.json` · `internal/config/`
 - state: `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/`, holding python, ask and cache; explicit cache and gateway state paths remain operator-owned · `internal/paths/`
-- daemon: shared engine MCP service with a 0600 `{state}/daemon.sock`, exclusive `{state}/daemon.lock` and `{state}/logs/daemon.log` · `internal/daemon/`
+- daemon: shared engine MCP service with a 0600 `{state}/daemon.sock`, exclusive `{state}/daemon.lock` and `daemon.log` in the log directory, `$PLUGIN_LOG_DIR/harvester`, else `{state}/logs` · `internal/daemon/`
 - stdio proxy: `harvester mcp`, forwarding to daemon with session recovery and uncertain-delivery errors · `internal/daemon/proxy.go`
 - setup: conversion provisioning and external gateway login service · `internal/setup/`
 - doctor: configuration, cache, search and conversion health rows · `internal/doctor/`

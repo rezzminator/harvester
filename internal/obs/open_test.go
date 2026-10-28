@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,13 +138,29 @@ func TestLevelFileOverTheCapMovesAsideWithALogCappedRow(t *testing.T) {
 	if err := os.Truncate(filepath.Join(dir, "info.jsonl"), 20971521); err != nil {
 		t.Fatal(err)
 	}
+	for n, body := range map[int]string{1: "generation one\n", 5: "generation five\n"} {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("info.jsonl.%d", n)), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	_, closeLog := OpenLog(context.Background(), Settings{Cmd: "harvester", Version: "1.0.0", Stderr: &bytes.Buffer{}})
 	closeLog(0)
 	if info, err := os.Stat(filepath.Join(dir, "info.jsonl.1")); err != nil || info.Size() != 20971521 {
 		t.Fatalf("rotated file: %v %v", info, err)
 	}
+	// Older generations shift up one; the fifth is the last kept, so the old fifth is gone.
+	if raw, err := os.ReadFile(filepath.Join(dir, "info.jsonl.2")); err != nil || string(raw) != "generation one\n" {
+		t.Fatalf("info.jsonl.2=%q %v", raw, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "info.jsonl.6")); err == nil {
+		t.Fatal("a sixth generation was kept")
+	}
+	if rows := readRows(t, filepath.Join(dir, "info.jsonl")); len(rows) == 0 || rows[0]["event"] != "cmd.start" {
+		t.Fatalf("the fresh info.jsonl=%v", rows)
+	}
 	rows := readRows(t, filepath.Join(dir, "warnings.jsonl"))
-	if len(rows) == 0 || rows[0]["event"] != "log-capped" || rows[0]["level"] != "warning" {
+	if len(rows) != 1 || rows[0]["event"] != "log-capped" || rows[0]["level"] != "warning" ||
+		rows[0]["msg"] != "level file exceeded 20971520 bytes; moved aside" || rows[0]["detail"].(map[string]any)["file"] != "info.jsonl" {
 		t.Fatalf("warnings=%v", rows)
 	}
 }
@@ -176,10 +193,22 @@ func TestUnwritableLogSaysItOncePerFailingStreak(t *testing.T) {
 	if got := strings.Count(stderr.String(), "harvester: plugin log"); got != 1 {
 		t.Fatalf("streak lines=%d: %q", got, stderr.String())
 	}
+	// The streak's line names the rows held for the next write: cmd.start, the first of the streak.
+	if got := stderr.String(); !strings.Contains(got, "1 row is kept for the next write") {
+		t.Fatalf("the streak line does not name the held rows: %q", got)
+	}
 	if err := os.Remove(shared); err != nil {
 		t.Fatal(err)
 	}
 	Logger(ctx).Info("harvest.three")
+	// The rows held across the failure are written first, in order.
+	var events []string
+	for _, row := range readRows(t, filepath.Join(shared, "harvester", "info.jsonl")) {
+		events = append(events, row["event"].(string))
+	}
+	if got := strings.Join(events, ","); got != "cmd.start,harvest.one,harvest.two,harvest.three" {
+		t.Fatalf("held rows were not written in order: %s", got)
+	}
 	if err := os.RemoveAll(shared); err != nil {
 		t.Fatal(err)
 	}
@@ -190,5 +219,37 @@ func TestUnwritableLogSaysItOncePerFailingStreak(t *testing.T) {
 	closeLog(0)
 	if got := strings.Count(stderr.String(), "harvester: plugin log"); got != 2 {
 		t.Fatalf("a success re-arms the line: %d: %q", got, stderr.String())
+	}
+}
+
+func TestDebugRecordsGoToTheirOwnLevelFile(t *testing.T) {
+	shared, _ := openJail(t)
+	ctx, closeLog := OpenLog(context.Background(), Settings{Cmd: "harvester", Version: "1.0.0", Stderr: &bytes.Buffer{}})
+	Logger(ctx).Debug("harvest.detail", "step", "parse")
+	closeLog(0)
+	dir := filepath.Join(shared, "harvester")
+	for _, row := range readRows(t, filepath.Join(dir, "info.jsonl")) {
+		if row["event"] == "harvest.detail" || row["level"] == "debug" {
+			t.Errorf("a debug row landed in info.jsonl: %v", row)
+		}
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "debug.jsonl"))
+	if !strings.Contains(string(raw), `"level":"debug","event":"harvest.detail"`) {
+		t.Fatalf("debug.jsonl has no harvest.detail debug row: %q", raw)
+	}
+}
+
+func TestUndecodableRecordIsAnErrorRowNotSilence(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "harvester")
+	var stderr bytes.Buffer
+	if n, err := newLogRows(dir, &stderr).Write([]byte("not json\n")); err == nil || n != 0 {
+		t.Fatalf("write=%d %v, want a failure", n, err)
+	}
+	rows := readRows(t, filepath.Join(dir, "errors.jsonl"))
+	if len(rows) != 1 || rows[0]["event"] != "log-record-invalid" || !strings.Contains(rows[0]["msg"].(string), "decode record") {
+		t.Fatalf("errors=%v", rows)
+	}
+	if got := stderr.String(); !strings.HasPrefix(got, "harvester: log-record-invalid: write plugin log row: decode record") {
+		t.Fatalf("screen=%q", got)
 	}
 }
