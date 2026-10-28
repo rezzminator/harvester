@@ -47,7 +47,6 @@ func (h *Harvester) storeResult(
 		Bytes:        bytes,
 		Chars:        chars,
 		ContentChars: chars,
-		Tokens:       EstimateTokens(body),
 		HTTPStatus:   statusCode,
 		Rungs:        rungs,
 		Partial:      gaps,
@@ -147,10 +146,6 @@ func (h *Harvester) resultFromCache(source, kind, content string, meta map[strin
 	} else {
 		bytes = int64(len(content))
 	}
-	tokens := EstimateTokens(content)
-	if stored, parseErr := strconv.Atoi(meta["token_count"]); parseErr == nil && stored >= 0 {
-		tokens = stored
-	}
 	// The delivering rung's status travels with the entry; an entry stored
 	// without one (a local document, an older cache) reports none, never 200.
 	status := 0
@@ -168,7 +163,6 @@ func (h *Harvester) resultFromCache(source, kind, content string, meta map[strin
 		Bytes:        bytes,
 		Chars:        chars,
 		ContentChars: chars,
-		Tokens:       tokens,
 		HTTPStatus:   status,
 		Rungs:        rungs,
 		Partial:      gaps,

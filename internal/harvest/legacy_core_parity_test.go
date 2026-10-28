@@ -3,7 +3,6 @@ package harvest
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,48 +12,6 @@ import (
 
 	"github.com/rezzminator/harvester/internal/paths"
 )
-
-func TestLegacyTokenEstimatorAllTenBehaviors(t *testing.T) {
-	t.Parallel()
-	code := strings.Repeat("a=[1];b={k:v};c=(x)+y*z/w;", 40)
-	cjkSymbols := strings.Repeat("中{}[]", 50)
-	tests := []struct {
-		name string
-		body string
-		want int
-	}{
-		{"empty is zero", "", 0},
-		{"Latin prose uses half", strings.Repeat("word ", 200), 500},
-		{"prose rounds up", "abc", 2},
-		{"code density uses 1.8 divisor", code, int(math.Ceil(float64(len([]rune(code))) / 1.8))},
-		{"CJK uses 1.3 multiplier", strings.Repeat("中文测试", 25), 130},
-		{"Korean is East Asian", strings.Repeat("가나다라", 25), 130},
-		// Retired: the Python oracle is gone, and its whole-text rule was the
-		// defect — one CJK rune used to switch the ENTIRE text (symbols
-		// included) to the 1.3x rate. cjkSymbols is 50 CJK runes plus 200
-		// symbol runes ("{}[]" x50): now each share is weighted on its own,
-		// CJK at 1.3x and the code-dense remainder at 1/1.8.
-		{"CJK and symbols weighted by share", cjkSymbols, int(math.Ceil(50*1.3 + 200/1.8))},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := EstimateTokens(test.body); got != test.want {
-				t.Fatalf("EstimateTokens()=%d, want %d", got, test.want)
-			}
-		})
-	}
-	if EstimateTokens(strings.Repeat("中", 100)) <= EstimateTokens(strings.Repeat("a ", 50)) {
-		t.Fatal("CJK estimate must exceed prose at the same rune count")
-	}
-	for _, body := range []string{strings.Repeat("The quick brown fox. ", 100), strings.Repeat("Lorem ipsum dolor sit amet ", 50)} {
-		if EstimateTokens(body) < len([]rune(body))/4 {
-			t.Fatalf("estimate %d under-counts lower bound for %d runes", EstimateTokens(body), len([]rune(body)))
-		}
-	}
-	if EstimateTokens(strings.Repeat("word ", 200)) < EstimateTokens(strings.Repeat("word ", 100)) {
-		t.Fatal("token estimate is not monotonic")
-	}
-}
 
 // TestCacheRootIsConfiguredDirOrTheOneDefault pins the single cache-root
 // rule: the configured dir (harvester.config.json cache.dir) when set, else

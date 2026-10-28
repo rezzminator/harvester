@@ -101,7 +101,7 @@ func TestRenderReadItemThinExtractionNamesSearchOnlyWhenAvailable(t *testing.T) 
 func TestRenderReadItemNamesTheGapsOfAnIncompleteArtifact(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "source.md")
 	result := harvest.Result{
-		HTTPStatus: 200, CacheStatus: "miss", Bytes: 9, Chars: 9, Tokens: 3, Path: path, Content: "body text",
+		HTTPStatus: 200, CacheStatus: "miss", Bytes: 9, Chars: 9, Path: path, Content: "body text",
 	}
 	for _, test := range []struct {
 		partial string
@@ -119,7 +119,7 @@ func TestRenderReadItemNamesTheGapsOfAnIncompleteArtifact(t *testing.T) {
 			"page 3 of 9 failed to convert",
 			ReadView{SizeOnly: true},
 			"=== [1/1] https://fixture.example/source\n" + path +
-				"\npartial: page 3 of 9 failed to convert\nsize: 9 chars, ~3 tokens",
+				"\npartial: page 3 of 9 failed to convert\nsize: 9 chars",
 		},
 	} {
 		result.Partial = test.partial
@@ -151,7 +151,7 @@ func TestRenderReadItemSizeProbeFailsAThinErrorPageLikeTheFullRead(t *testing.T)
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			result := harvest.Result{
-				HTTPStatus: test.status, Bytes: 4096, Chars: test.chars, Tokens: 30, Path: path,
+				HTTPStatus: test.status, Bytes: 4096, Chars: test.chars, Path: path,
 			}
 			got, failed := RenderReadItem(1, 1, source, result, ReadView{SizeOnly: true})
 			if failed != test.wantFailed || !strings.Contains(got, test.wantContains) {

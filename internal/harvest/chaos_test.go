@@ -427,8 +427,8 @@ func (rig *chaosRig) checkAnswer(call *chaosCall) {
 			}
 			return
 		}
-		if call.mode == "size" && (content != "" || result.Tokens == 0) {
-			rig.errorf("size-only %s answered content=%d chars tokens=%d", item.id, len(content), result.Tokens)
+		if call.mode == "size" && (content != "" || result.Chars == 0) {
+			rig.errorf("size-only %s answered content=%d chars, size %d chars", item.id, len(content), result.Chars)
 		}
 		content = string(raw)
 	}

@@ -413,50 +413,6 @@ func TestGoogleDriveDownloadURLRecognizesOnlyOwnedFileLinks(t *testing.T) {
 	}
 }
 
-func TestTokenEstimateMatchesOracleRegimes(t *testing.T) {
-	t.Parallel()
-	if got := EstimateTokens(strings.Repeat("word ", 100)); got != 250 {
-		t.Fatalf("prose tokens=%d", got)
-	}
-	if got := EstimateTokens(strings.Repeat("{}[];", 100)); got != 278 {
-		t.Fatalf("code tokens=%d", got)
-	}
-	if got := EstimateTokens(strings.Repeat("漢", 10)); got != 13 {
-		t.Fatalf("CJK tokens=%d", got)
-	}
-}
-
-// TestTokenEstimateWeighsByShareNotByPresence pins the fix for cache.go's
-// EstimateTokens: a single CJK/symbol rune used to switch the WHOLE text to
-// that rune's rate. Pure prose, pure code and pure CJK keep their exact HEAD
-// values (receipts do not shift for them); only mixed text changes - it is
-// now CJK runes x1.3 plus the remaining runes at the prose or code rate,
-// weighted by each kind's own share.
-func TestTokenEstimateWeighsByShareNotByPresence(t *testing.T) {
-	t.Parallel()
-	mixed := strings.Repeat("word ", 2000)[:10000-1] + "漢" // 1 CJK rune among 10,000 prose runes
-	if n := len([]rune(mixed)); n != 10000 {
-		t.Fatalf("fixture has %d runes, want 10000", n)
-	}
-	tests := []struct {
-		name string
-		body string
-		want int
-	}{
-		{"pure prose unchanged", strings.Repeat("word ", 100), 250},
-		{"pure code unchanged", strings.Repeat("{}[];", 100), 278},
-		{"pure CJK unchanged", strings.Repeat("漢", 10), 13},
-		{"mixed: 1 CJK rune does not flip 10,000 prose runes to 1.3x", mixed, 5001},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := EstimateTokens(test.body); got != test.want {
-				t.Fatalf("EstimateTokens()=%d, want %d", got, test.want)
-			}
-		})
-	}
-}
-
 func TestChromeTransportUsesUTLSAndRejectsMixedDNSAnswers(t *testing.T) {
 	t.Parallel()
 	h := mustNew(t, Options{CacheDir: t.TempDir(), ResolvePublic: func(context.Context, string) ([]net.IP, error) {

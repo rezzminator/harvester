@@ -3,6 +3,7 @@
 ## Contents
 
 - [Commands](#commands)
+  - [Read output](#read-output)
 - [Install and register](#install-and-register)
 - [Configuration and state](#configuration-and-state)
 - [Development](#development)
@@ -50,6 +51,22 @@ Engine clients expose those tools under these names:
   when enabled in the Harvester config.
 - **OpenCode:** `harvester_read`, `harvester_search_web`,
   `harvester_search_literature`, `harvester_download_file`
+
+### Read output
+
+`read` answers one text block per item. Each item shows its content up to
+`output.maxInlineChars` characters (default 50,000); a longer item carries a
+`truncated: {shown} of {total} chars, full text at the path` line, and its
+whole artifact sits at the absolute path on the block's second line, ready
+to read in pages. `include_content: false` replaces the content with a
+`size: {chars} chars` line.
+
+Harvester counts and estimates no tokens, and never cuts an answer to fit a
+client's output limit: an answer over that limit is the client's to handle.
+Claude Code saves an MCP result over its limit (`MAX_MCP_OUTPUT_TOKENS`,
+default 25,000 tokens) to a file and gives the model that file's path in
+place of the content. The `--json` results carry `chars`, never a token
+count, and artifacts carry no `token_count` frontmatter.
 
 ## Install and register
 
