@@ -18,7 +18,7 @@ import (
 	"sync"
 	"testing"
 
-	pfmconfig "github.com/rezzminator/harvester/internal/config"
+	"github.com/rezzminator/harvester/internal/config"
 	"github.com/rezzminator/harvester/internal/harvest"
 	"github.com/rezzminator/harvester/internal/harvestmcp"
 	"github.com/rezzminator/harvester/internal/paths"
@@ -107,10 +107,10 @@ func (site *fixtureSite) probe(path string) string {
 	return site.probes[path]
 }
 
-func downloadRuntime(t *testing.T) pfmconfig.Runtime {
+func downloadRuntime(t *testing.T) config.Runtime {
 	t.Helper()
 	home := t.TempDir()
-	return pfmconfig.Runtime{Paths: paths.Values{Home: home}, Config: pfmconfig.Config{Harvester: askHarvester(home)}}
+	return config.Runtime{Paths: paths.Values{Home: home}, Config: config.Config{Harvester: askHarvester(home)}}
 }
 
 // TestDownloadPrintsPathKindTypeAndSize: each URL's receipt names the stored

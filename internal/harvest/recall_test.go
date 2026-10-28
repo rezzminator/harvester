@@ -238,7 +238,7 @@ func TestErrorReasonClassNeverRepeatsRawErrorText(t *testing.T) {
 	t.Parallel()
 	pathBearing := &os.PathError{
 		Op:   "open",
-		Path: "/tmp/pfm-harvest-fulldom-829172/input.html",
+		Path: "/tmp/harvester-fulldom-829172/input.html",
 		Err:  errors.New("no such file or directory"),
 	}
 	stderrBearing := fmt.Errorf(
@@ -285,7 +285,7 @@ func TestErrorReasonClassNeverRepeatsRawErrorText(t *testing.T) {
 // caller reads. Watched FAILING on HEAD before the fix (see the red log).
 func TestFetchPublicNeverRepeatsAScratchPathFromAPartialReason(t *testing.T) {
 	t.Parallel()
-	const scratchDir = "/private/tmp/pfm-harvest-fulldom-829172"
+	const scratchDir = "/private/tmp/harvester-fulldom-829172"
 	scratchErr := fmt.Errorf(
 		"remove full-DOM conversion scratch: RemoveAll %s: harvestpy conversion failed "+
 			"(RuntimeError): worker crashed (stderr: Traceback (most recent call last):\n"+
@@ -303,7 +303,7 @@ func TestFetchPublicNeverRepeatsAScratchPathFromAPartialReason(t *testing.T) {
 	if !strings.Contains(result.Partial, "the full-DOM conversion failed") {
 		t.Fatalf("the public result lost the partial flag: partial=%q", result.Partial)
 	}
-	for _, leaked := range []string{scratchDir, "pfm-harvest-fulldom", "Traceback", "worker.py", "RuntimeError", "RemoveAll"} {
+	for _, leaked := range []string{scratchDir, "harvester-fulldom", "Traceback", "worker.py", "RuntimeError", "RemoveAll"} {
 		if strings.Contains(result.Partial, leaked) {
 			t.Fatalf("the public PARTIAL reason repeats raw error text (%q): %q", leaked, result.Partial)
 		}
@@ -315,7 +315,7 @@ func TestFetchPublicNeverRepeatsAScratchPathFromAPartialReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the public artifact: %v", err)
 	}
-	for _, leaked := range []string{scratchDir, "pfm-harvest-fulldom", "Traceback", "worker.py", "RuntimeError", "RemoveAll"} {
+	for _, leaked := range []string{scratchDir, "harvester-fulldom", "Traceback", "worker.py", "RuntimeError", "RemoveAll"} {
 		if strings.Contains(string(body), leaked) {
 			t.Fatalf("the public artifact repeats raw error text (%q): %.400q", leaked, string(body))
 		}

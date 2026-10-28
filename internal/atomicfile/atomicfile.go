@@ -25,11 +25,6 @@ func Write(path string, content []byte, mode fs.FileMode) (err error) {
 	})
 }
 
-// Create publishes a complete file only when path is still absent.
-func Create(path string, content []byte, mode fs.FileMode) error {
-	return publish(path, mode, func(scratch *os.File) error { _, err := scratch.Write(content); return err }, true)
-}
-
 // ErrTooLarge reports a WriteFrom stream that ran past its limit; the target
 // is left untouched and no scratch remains.
 var ErrTooLarge = errors.New("content exceeds the size limit")
@@ -63,7 +58,6 @@ func publish(
 	path string,
 	mode fs.FileMode,
 	fill func(*os.File) error,
-	exclusive ...bool,
 ) (err error) {
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -97,16 +91,6 @@ func publish(
 	}
 	if err := scratch.Close(); err != nil {
 		return fmt.Errorf("write %s: close scratch: %w", path, err)
-	}
-	if len(exclusive) > 0 && exclusive[0] {
-		if err := os.Link(scratchPath, path); err != nil {
-			return fmt.Errorf("create %s: publish: %w", path, err)
-		}
-		if err := os.Remove(scratchPath); err != nil {
-			return fmt.Errorf("create %s: remove scratch: %w", path, err)
-		}
-		published = true
-		return nil
 	}
 	if err := os.Rename(scratchPath, path); err != nil {
 		return fmt.Errorf("write %s: replace: %w", path, err)

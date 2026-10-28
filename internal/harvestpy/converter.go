@@ -64,7 +64,7 @@ func modelRootFor(python string) string {
 }
 
 // converterProtocolEnv are the variables converter.py reads. The worker
-// environment carries them ONLY from Runtime — a value inherited from the pfm
+// environment carries them ONLY from Runtime — a value inherited from the harvester
 // process is stripped, so harvester.config.json stays the one source.
 var converterProtocolEnv = []string{
 	"HARVESTER_PDF_OCR", "HARVESTER_PDF_LAYOUT", "HARVESTPY_MODEL_ROOT", "HARVESTPY_MODEL_STAGING",
@@ -84,7 +84,7 @@ func withPythonBytecodeHome(parent []string) []string {
 			env = append(env, entry)
 		}
 	}
-	return append(env, pythonPycachePrefixEnv+"="+filepath.Join(os.TempDir(), "pfm-pycache"))
+	return append(env, pythonPycachePrefixEnv+"="+filepath.Join(os.TempDir(), "harvester-pycache"))
 }
 
 // workerEnv is the converter process environment: the parent environment

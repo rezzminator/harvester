@@ -14,7 +14,7 @@ import (
 // preview ("(more)"), a card the reader carried in full after "Continue
 // Reading", an answer to a related question under a "Related" label with an
 // "Upvoted by" credential spanning profile links, an ad and "Related
-// questions" lists between them. Every rung pfm runs itself is served
+// questions" lists between them. Every rung harvester runs itself is served
 // Cloudflare's challenge, HTTP 403, as Quora serves anonymous clients.
 const quoraURL = "https://www.quora.com/What-is-the-meaning-of-life"
 

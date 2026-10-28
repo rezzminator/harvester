@@ -214,7 +214,7 @@ def _keep_linked_blocks() -> None:
 # navigation-not-searchable"), "author" (a scholarly page's author list), "meta"
 # (its metadata table) and more delete the page's own text. An element the page
 # marks as its own — _mark_kept_blocks — and everything inside it is exempt.
-_KEEP = "data-pfm-keep"
+_KEEP = "data-harvester-keep"
 _KEPT_BLOCKS_PATCHED = False
 
 
@@ -244,7 +244,7 @@ def _keep_marked_blocks() -> None:
 # keep the comments: the main-content pass selects the article, and a comments
 # section beside it is never reached.
 _COMMENTS_AS_CONTENT = False
-_HELD_QUOTE = "pfm-held-quote"
+_HELD_QUOTE = "harvester-held-quote"
 
 
 def _extract_comments_as_content() -> None:
@@ -502,7 +502,7 @@ def _keep_extensionless_images() -> None:
 # sponsor logo, a thumbnail opening the full picture — lost where it points.
 # Each image inside a link carries the link's target through extraction and is
 # written as a linked image, [![alt](src)](href).
-_LINK_TARGET = "data-pfm-link"
+_LINK_TARGET = "data-harvester-link"
 
 
 def _mark_linked_images(tree) -> None:
@@ -3283,7 +3283,7 @@ def _office_checked(convert_one):
 
 
 # The one dispatch point: a kind, routed by the Go side from the body's magic
-# bytes (pfm/internal/harvest/format_detect.go), maps to its converter. The
+# bytes (internal/harvest/format_detect.go), maps to its converter. The
 # text formats and the web archives arrive under their own kind and take the
 # bake-off winners above, and the Office family its office readers.
 _CONVERTERS = {

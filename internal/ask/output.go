@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	pfmengine "github.com/rezzminator/harvester/internal/engine"
+	"github.com/rezzminator/harvester/internal/engine"
 )
 
 type claudeEnvelope struct {
@@ -49,9 +49,9 @@ func parseModelUsage(raw json.RawMessage) (*TokenUsage, error) {
 	return usage, nil
 }
 
-func parseOutput(result *processOutput, id pfmengine.ID) error {
+func parseOutput(result *processOutput, id engine.ID) error {
 	switch id {
-	case pfmengine.Claude:
+	case engine.Claude:
 		var envelope claudeEnvelope
 		if err := json.Unmarshal([]byte(result.Stdout), &envelope); err != nil {
 			return fmt.Errorf("parse Claude JSON envelope: %w", err)
@@ -79,7 +79,7 @@ func parseOutput(result *processOutput, id pfmengine.ID) error {
 		if result.IsError {
 			return fmt.Errorf("headless envelope reported an error for Claude")
 		}
-	case pfmengine.Codex:
+	case engine.Codex:
 		if err := parseCodexJSONL(result); err != nil {
 			return err
 		}

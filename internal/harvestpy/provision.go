@@ -182,7 +182,7 @@ func provisionWithTargets(
 	current := RuntimeRoot(options.Root, platform)
 	envRoot := filepath.Join(options.Root, "env", platform.String())
 	// Single-flight from here on: reuse check, downloads, build and swap all
-	// touch this root, and a second pfm converging it at the same time is how
+	// touch this root, and a second harvester converging it at the same time is how
 	// one of them reads a tree the other is halfway through replacing —
 	// ProvisionBrowser's own lock (provision_browser.go) guards its sibling
 	// root the same way.

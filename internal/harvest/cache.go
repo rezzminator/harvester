@@ -36,8 +36,8 @@ func newCache(root string, ttl time.Duration, clocks ...clock.Clock) *Cache {
 }
 
 func defaultHarvestCacheDir() (string, error) {
-	// The default follows the plugin state root, never the working directory.
-	// setup moves the legacy cache here; an explicit cache.dir is unchanged.
+	// The default follows the plugin state root, never the working directory;
+	// an explicit cache.dir is unchanged.
 
 	home, err := paths.Home()
 	if err != nil {

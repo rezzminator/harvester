@@ -1,6 +1,6 @@
 # Harvester
 
-Harvester reads `harvester.config.json` beside `pfm.config.json`. CLI fetches and both MCP gateways use the same retrieval core. `pfm config show` is the operator view of effective settings. Long-running servers load settings at startup and need a restart after configuration changes.
+Harvester reads `harvester.config.json` at the path `harvester config path` prints. CLI fetches and both MCP gateways use the same retrieval core. `harvester config show` is the operator view of effective settings. Long-running servers load settings at startup and need a restart after configuration changes.
 
 ## Scholarly providers
 

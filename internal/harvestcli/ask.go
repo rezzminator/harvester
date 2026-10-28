@@ -9,7 +9,7 @@ import (
 	"github.com/rezzminator/harvester/internal/ask"
 	"github.com/rezzminator/harvester/internal/cli"
 	"github.com/rezzminator/harvester/internal/config"
-	pfmengine "github.com/rezzminator/harvester/internal/engine"
+	"github.com/rezzminator/harvester/internal/engine"
 	"github.com/rezzminator/harvester/internal/harvest"
 	"github.com/rezzminator/harvester/internal/harvestmcp"
 )
@@ -50,10 +50,10 @@ func runAsk(args []string, stdout, stderr io.Writer, runtime config.Runtime) int
 		return 2
 	}
 
-	engineID := pfmengine.ID("")
+	engineID := engine.ID("")
 	var err error
 	if strings.TrimSpace(*engineName) != "" {
-		engineID, err = pfmengine.Parse(*engineName)
+		engineID, err = engine.Parse(*engineName)
 	} else {
 		engineID, err = runtime.Config.DefaultEngine()
 	}

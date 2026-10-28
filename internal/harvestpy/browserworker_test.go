@@ -481,7 +481,7 @@ func TestBrowserRoutePythonSeam(t *testing.T) {
 
 // TestBrowserChromeLauncherPythonSeam runs the Chrome launcher seam with NO
 // browser and NO patchright: on darwin Chrome is spawned with TCC
-// responsibility disclaimed (so tccd stops blaming pfm for Chrome touching its
+// responsibility disclaimed (so tccd stops blaming harvester for Chrome touching its
 // own app bundle) and keeps its arguments, environment, descriptors, signals
 // and exit status; off darwin the launch is untouched.
 func TestBrowserChromeLauncherPythonSeam(t *testing.T) {

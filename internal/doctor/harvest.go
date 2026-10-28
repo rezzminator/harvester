@@ -68,7 +68,7 @@ func printHarvestCacheDoctor(stdout io.Writer, harvester config.HarvesterConfig)
 
 // printHarvestSearchDoctor prints the search tool's one health line; the
 // probe itself (OFF/reachable/UNREACHABLE/configured classification) lives in
-// harvest.ProbeSearch, never here — cmd/pfm is dispatch, not policy (C3).
+// harvest.ProbeSearch, never here — cmd/harvester is dispatch, not policy.
 func printHarvestSearchDoctor(ctx context.Context, stdout io.Writer, harvester config.HarvesterConfig) int {
 	probe := harvest.ProbeSearch(ctx, harvest.SearchOptions{
 		SearXNGURL:    harvester.Search.SearXNGURL,

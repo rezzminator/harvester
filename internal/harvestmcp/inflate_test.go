@@ -61,10 +61,10 @@ func TestInflateHandsTheBodyToTheSidecarAndRemovesTheScratch(t *testing.T) {
 	if !errors.Is(err, harvest.ErrDecompressionBomb) || !strings.Contains(err.Error(), "more than 4096 bytes") {
 		t.Errorf("bomb: err = %v, want harvest.ErrDecompressionBomb naming the sidecar's cap", err)
 	}
-	// pfm-pycache is the sidecar's fixed bytecode home under TMPDIR
+	// harvester-pycache is the sidecar's fixed bytecode home under TMPDIR
 	// (harvestpy withPythonBytecodeHome), not inflate scratch.
 	left, err := os.ReadDir(scratch)
-	left = slices.DeleteFunc(left, func(entry os.DirEntry) bool { return entry.Name() == "pfm-pycache" })
+	left = slices.DeleteFunc(left, func(entry os.DirEntry) bool { return entry.Name() == "harvester-pycache" })
 	if err != nil || len(left) != 0 {
 		t.Errorf("scratch left behind: %v, %v; want none", left, err)
 	}
