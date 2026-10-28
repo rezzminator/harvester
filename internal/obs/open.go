@@ -59,7 +59,7 @@ func processScope() *scope {
 // OpenLog installs the process logger and writes the cmd.start record. The
 // returned context carries the same logger for every span below it; the
 // returned function writes cmd.exit with the process's exit code and total
-// duration, then closes the file — call it exactly once, at process exit.
+// duration — call it exactly once, at process exit.
 //
 // A destination that cannot be resolved or opened is NOT silent: the reason
 // goes to Settings.Stderr and the process keeps running against a discarding
