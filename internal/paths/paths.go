@@ -13,12 +13,13 @@ const (
 	EnvHome          = "HARVESTER_HOME_DIR"
 	EnvLogLevel      = "HARVESTER_LOG_LEVEL"
 	EnvLogComponents = "HARVESTER_LOG_COMPONENTS"
-	EnvLogMirror     = "HARVESTER_LOG_MIRROR"
+	// EnvPluginLogDir is the shared log root every Professor plugin writes under, in a directory named for the plugin.
+	EnvPluginLogDir = "PLUGIN_LOG_DIR"
 )
 
 type Values struct {
-	Home    string
-	LogFile string
+	Home   string
+	LogDir string
 }
 
 func Home() (string, error) {
@@ -48,9 +49,18 @@ func Resolve() (Values, error) {
 	if err != nil {
 		return Values{}, fmt.Errorf("resolve harvester home: %w", err)
 	}
-	return Values{Home: home, LogFile: filepath.Join(StateRoot(home), "logs", "harvester.jsonl")}, nil
+	return Values{Home: home, LogDir: LogDir(home)}, nil
 }
 
 func DaemonSocket(home string) string { return filepath.Join(StateRoot(home), "daemon.sock") }
 func DaemonLock(home string) string   { return filepath.Join(StateRoot(home), "daemon.lock") }
-func DaemonLog(home string) string    { return filepath.Join(StateRoot(home), "logs", "daemon.log") }
+func DaemonLog(home string) string    { return filepath.Join(LogDir(home), "daemon.log") }
+
+// LogDir is where harvester logs: $PLUGIN_LOG_DIR/harvester when PLUGIN_LOG_DIR is set, else the state root's logs.
+// Nothing else sets the location.
+func LogDir(home string) string {
+	if dir := strings.TrimSpace(os.Getenv(EnvPluginLogDir)); dir != "" {
+		return filepath.Join(dir, "harvester")
+	}
+	return filepath.Join(StateRoot(home), "logs")
+}

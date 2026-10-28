@@ -24,25 +24,17 @@ func AlphaBuild(version string) bool {
 	return strings.HasSuffix(strings.TrimSpace(version), AlphaSuffix)
 }
 
-// StderrMirror is the value paths.EnvLogMirror takes to mirror every record
-// onto stderr for a foreground run.
-const StderrMirror = "stderr"
-
 // Settings is what a process entry tells the activity log: which verb is
 // running, which build, and the machine's log policy from harvester.config.json
-// (Level and Components as § Control spells them; KeepDays 0 disables the
-// time limit). Everything else has a default: Path falls back to the resolved
-// home's harvester.jsonl, Env to the real process, Timing to the wall clock, Stderr
-// to os.Stderr.
+// (Level and Components as § Control spells them). Everything else has a
+// default: Dir falls back to paths.LogDir, Env to the real process, Timing to
+// the wall clock, Stderr to os.Stderr.
 type Settings struct {
 	Cmd        string
 	Version    string
 	Level      string
 	Components map[string]string
-	KeepFiles  int
-	MaxMB      int
-	KeepDays   int
-	Path       string
+	Dir        string
 	Env        paths.Env
 	Timing     clock.Clock
 	Stderr     io.Writer
@@ -93,10 +85,10 @@ func OpenLog(ctx context.Context, settings Settings) (context.Context, func(exit
 	if levelErr != nil {
 		fmt.Fprintf(stderr, "harvester: activity log: %v\n", levelErr)
 	}
-	destination, closer := slog.Handler(discardHandler{}), io.Closer(nil)
+	destination := slog.Handler(discardHandler{})
 	if levels.Global.Level != LevelOff {
 		var openErr error
-		destination, closer, openErr = openDestination(env, settings, timing, stderr)
+		destination, openErr = openDestination(settings, stderr)
 		if openErr != nil {
 			fmt.Fprintf(stderr, "harvester: activity log unavailable: %v\n", openErr)
 		}
@@ -122,95 +114,25 @@ func OpenLog(ctx context.Context, settings Settings) (context.Context, func(exit
 			slog.Int(FieldExit, exitCode),
 			slog.Int64(FieldDur, timing.Now().Sub(started).Milliseconds()),
 		)
-		if closer != nil {
-			if err := closer.Close(); err != nil {
-				fmt.Fprintf(stderr, "harvester: activity log: %v\n", err)
-			}
-		}
 	}
 }
 
-// openDestination builds the handler records are written through: the home's
-// harvester.jsonl, plus a stderr mirror when paths.EnvLogMirror asks for one. The
-// destination takes every level — levelHandler in front of it owns the
-// control — and applies Scrub last. A failure returns the discarding handler
-// AND the reason — the caller reports it, so a log nobody can write never
-// reads as a quiet one.
-func openDestination(
-	env paths.Env,
-	settings Settings,
-	timing clock.Clock,
-	stderr io.Writer,
-) (slog.Handler, io.Closer, error) {
-	options := &slog.HandlerOptions{Level: slog.LevelDebug, ReplaceAttr: Scrub}
-	mirror := env.Get(paths.EnvLogMirror) == StderrMirror
-	path := settings.Path
-	if path == "" {
+// openDestination builds the handler records are written through: the level files of the plugin log
+// directory (§ Logging). The destination takes every level — levelHandler in front of it owns the control
+// — and applies Scrub last. A directory that cannot be resolved returns the discarding handler AND the
+// reason — the caller reports it, so a log nobody can write never reads as a quiet one. A directory that
+// cannot be written is reported by levelFiles itself, once per failing streak.
+func openDestination(settings Settings, stderr io.Writer) (slog.Handler, error) {
+	dir := settings.Dir
+	if dir == "" {
 		resolved, err := paths.Resolve()
 		if err != nil {
-			return mirrorOnly(mirror, stderr, options), nil, fmt.Errorf("resolve log path: %w", err)
+			return discardHandler{}, fmt.Errorf("resolve log directory: %w", err)
 		}
-		path = resolved.LogFile
+		dir = resolved.LogDir
 	}
-	writer, err := newRotator(path, settings.KeepFiles, settings.MaxMB, settings.KeepDays, timing, stderr)
-	if err != nil {
-		return mirrorOnly(mirror, stderr, options), nil, err
-	}
-	handler := slog.Handler(slog.NewJSONHandler(writer, options))
-	if mirror {
-		handler = fanout{handler, slog.NewJSONHandler(stderr, options)}
-	}
-	return handler, writer, nil
-}
-
-// mirrorOnly is the destination left when the file could not be opened: the
-// stderr mirror if one was asked for, and otherwise nothing at all.
-func mirrorOnly(mirror bool, stderr io.Writer, options *slog.HandlerOptions) slog.Handler {
-	if mirror {
-		return slog.NewJSONHandler(stderr, options)
-	}
-	return discardHandler{}
-}
-
-// fanout writes every record to each handler — the stderr mirror.
-type fanout []slog.Handler
-
-func (handlers fanout) Enabled(ctx context.Context, level slog.Level) bool {
-	for _, handler := range handlers {
-		if handler.Enabled(ctx, level) {
-			return true
-		}
-	}
-	return false
-}
-
-func (handlers fanout) Handle(ctx context.Context, record slog.Record) error {
-	var failure error
-	for _, handler := range handlers {
-		if !handler.Enabled(ctx, record.Level) {
-			continue
-		}
-		if err := handler.Handle(ctx, record.Clone()); err != nil && failure == nil {
-			failure = fmt.Errorf("write activity record: %w", err)
-		}
-	}
-	return failure
-}
-
-func (handlers fanout) WithAttrs(attrs []slog.Attr) slog.Handler {
-	next := make(fanout, 0, len(handlers))
-	for _, handler := range handlers {
-		next = append(next, handler.WithAttrs(attrs))
-	}
-	return next
-}
-
-func (handlers fanout) WithGroup(name string) slog.Handler {
-	next := make(fanout, 0, len(handlers))
-	for _, handler := range handlers {
-		next = append(next, handler.WithGroup(name))
-	}
-	return next
+	options := &slog.HandlerOptions{Level: slog.LevelDebug, ReplaceAttr: Scrub}
+	return slog.NewJSONHandler(&levelFiles{dir: dir, stderr: stderr}, options), nil
 }
 
 // discardHandler drops every record: the destination before OpenLog, and the
