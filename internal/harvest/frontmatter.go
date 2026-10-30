@@ -32,7 +32,7 @@ const (
 // follows, sorted.
 var frontmatterKeys = []string{
 	keySource, keyRequest, "field", "url", keyKind, "method", "via", "rungs", "http_status", "fetched_at",
-	keyTitle, keyAuthor, keyPublished, keySite, keyLicense, "chars", "token_count", "gaps", "transformed",
+	keyTitle, keyAuthor, keyPublished, keySite, keyLicense, "chars", "gaps", "transformed",
 }
 
 // converterMetaKeys are the facts a converter reads about a document

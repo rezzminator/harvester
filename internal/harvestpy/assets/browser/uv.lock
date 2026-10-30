@@ -21,6 +21,17 @@ wheels = [
 ]
 
 [[package]]
+name = "harvester-browser"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "patchright" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "patchright", specifier = "==1.62.1" }]
+
+[[package]]
 name = "patchright"
 version = "1.62.1"
 source = { registry = "https://pypi.org/simple" }
@@ -38,17 +49,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/84/d8/53680cf0313fc3d0c4fb028c39c9c752241eea03c7d3ada0837b144a7ada/patchright-1.62.1-py3-none-win_amd64.whl", hash = "sha256:ad8a13859e775f6204b786785f8ccc1de60ea078c45485834025c827761dba2e", size = 38156646, upload-time = "2026-08-17T19:09:53.7Z" },
     { url = "https://files.pythonhosted.org/packages/e9/55/64867b8a201dfb314ccfa5d94667ee851dc6eaaf87b44b1e47eababda313/patchright-1.62.1-py3-none-win_arm64.whl", hash = "sha256:60e1e4cb56905a84597c83fe458bed3406092c3fa170138170ed175b8ce5fae2", size = 34201057, upload-time = "2026-08-17T19:09:57.403Z" },
 ]
-
-[[package]]
-name = "pfm-harvest-browser"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "patchright" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "patchright", specifier = "==1.62.1" }]
 
 [[package]]
 name = "pyee"

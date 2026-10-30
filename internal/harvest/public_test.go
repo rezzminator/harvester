@@ -300,7 +300,6 @@ func TestBothStoresWriteTheirFrontmatterAndBodiesCarryNone(t *testing.T) {
 		"chars": strconv.Itoa(
 			contentChars(body),
 		),
-		"token_count": strconv.Itoa(EstimateTokens(body)),
 		"gaps":        "login wall",
 		"transformed": "json-outline",
 	}
@@ -332,7 +331,6 @@ func TestBothStoresWriteTheirFrontmatterAndBodiesCarryNone(t *testing.T) {
 		"published":   "2024-05-06",
 		"license":     "CC BY",
 		"chars":       strconv.Itoa(contentChars(body)),
-		"token_count": strconv.Itoa(EstimateTokens(body)),
 		"gaps":        "login wall",
 		"transformed": "json-outline",
 	}
@@ -340,6 +338,17 @@ func TestBothStoresWriteTheirFrontmatterAndBodiesCarryNone(t *testing.T) {
 		if meta[key] != value {
 			t.Errorf("public %s = %q, want %q", key, meta[key], value)
 		}
+	}
+	// Harvester estimates no tokens: no artifact, receipt or --json result carries a count.
+	for store, fields := range map[string]map[string]string{"private": private, "public": meta} {
+		if count, ok := fields["token_count"]; ok {
+			t.Errorf("%s frontmatter carries token_count %q", store, count)
+		}
+	}
+	if encoded, err := json.Marshal(JSONResults([]Result{stored, public})); err != nil {
+		t.Fatalf("encode results: %v", err)
+	} else if strings.Contains(string(encoded), `"tokens"`) {
+		t.Errorf("JSON results carry a token estimate: %s", encoded)
 	}
 	for _, private := range []string{"method", "rungs", "site"} {
 		if _, ok := meta[private]; ok {

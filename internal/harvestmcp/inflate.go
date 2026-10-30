@@ -20,7 +20,7 @@ func (converter pythonConverter) Inflate(
 	body []byte,
 	limit int64,
 ) (inner []byte, returnErr error) {
-	directory, err := os.MkdirTemp("", "pfm-harvest-inflate-")
+	directory, err := os.MkdirTemp("", "harvester-inflate-")
 	if err != nil {
 		return nil, fmt.Errorf("create inflate scratch: %w", err)
 	}

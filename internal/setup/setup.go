@@ -1,4 +1,4 @@
-// Package setup provisions conversion, migrates legacy state, and owns the gateway service.
+// Package setup provisions conversion and owns the gateway service.
 package setup
 
 import (
@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"syscall"
 	"time"
 
@@ -92,14 +92,6 @@ func run(ctx context.Context, cfg config.Runtime, offline bool, stdout io.Writer
 		case <-timer.C:
 		}
 	}
-	legacyRoot, err := legacyConfigRoot(home)
-	if err != nil {
-		return err
-	}
-	cfg, err = importLegacyConfig(cfg, legacyRoot, stdout)
-	if err != nil {
-		return fmt.Errorf("import legacy config: %w", err)
-	}
 	if !cfg.Config.Harvester.External.Enabled {
 		if err := ops.service(ctx, cfg); err != nil {
 			return fmt.Errorf("disable gateway service: %w", err)
@@ -114,56 +106,12 @@ func run(ctx context.Context, cfg config.Runtime, offline bool, stdout io.Writer
 		return fmt.Errorf("conversion target %s blocked-exact-lock: %v", platform, plan.PackageBlockers)
 	}
 	fmt.Fprintf(stdout, "setup: conversion platform=%s python=%s offline=%t\n", platform, plan.PythonVersion, offline)
-	legacyState := filepath.Join(home, ".local", "state", "pfm")
-	oldPython := filepath.Join(legacyState, "harvest-python")
-	if override := os.Getenv("PFM_HARVEST_ROOT"); override != "" {
-		oldPython = override
-	}
 	root := pythonRoot(home)
-	if !filepath.IsAbs(root) || !filepath.IsAbs(oldPython) {
-		return fmt.Errorf("Python roots must be absolute")
-	}
-	if err := rejectOverlappingRoots(oldPython, root); err != nil {
-		return err
-	}
-	if _, err := directory(oldPython); err != nil {
-		return err
-	}
-	if err := validateLegacyPython(oldPython); err != nil {
-		return err
+	if !filepath.IsAbs(root) {
+		return fmt.Errorf("Python root must be absolute")
 	}
 	if _, err := directory(root); err != nil {
 		return err
-	}
-	retainedLegacy := false
-	migrate := func(source, target string) error {
-		err := moveState(source, target)
-		if errors.Is(err, errMigrationRetained) {
-			retainedLegacy = true
-			fmt.Fprintf(stdout, "setup: warning: %v; stop legacy writers and reconcile retained files before manual removal\n", err)
-			return nil
-		}
-		return err
-	}
-	if err := migrate(filepath.Join(legacyState, "harvest-ask"), paths.AskRoot(home)); err != nil {
-		return fmt.Errorf("migrate ask state: %w", err)
-	}
-	if cfg.Config.Harvester.Cache.Dir == "" {
-		for _, name := range []string{".harvester-cache", ".cache"} {
-			if err := migrate(filepath.Join(legacyRoot, name), paths.HarvesterCacheDir(home)); err != nil {
-				return fmt.Errorf("migrate cache %s: %w", name, err)
-			}
-		}
-		if cfg.Config.Harvester.External.StateDir == "" {
-			if err := migrate(filepath.Join(legacyRoot, ".harvester-state"), filepath.Join(state, ".harvester-state")); err != nil {
-				return fmt.Errorf("migrate gateway OAuth state: %w", err)
-			}
-		}
-	}
-	for _, name := range []string{"cache", "models"} {
-		if err := migrate(filepath.Join(oldPython, name), filepath.Join(root, name)); err != nil {
-			return fmt.Errorf("migrate Python %s: %w", name, err)
-		}
 	}
 	report, checkErr := ops.check(ctx, root, platform)
 	if checkErr != nil || !report.Healthy {
@@ -177,28 +125,10 @@ func run(ctx context.Context, cfg config.Runtime, offline bool, stdout io.Writer
 	}
 	report, checkErr = ops.check(ctx, root, platform)
 	if checkErr != nil {
-		return fmt.Errorf("new conversion environment is not healthy; legacy environment retained: %w", checkErr)
+		return fmt.Errorf("new conversion environment is not healthy: %w", checkErr)
 	}
 	if !report.Healthy {
-		return fmt.Errorf("new conversion environment is not healthy; legacy environment retained")
-	}
-	if exists, err := directory(oldPython); err != nil {
-		return err
-	} else if exists && !retainedLegacy {
-		if err := validateLegacyPython(oldPython); err != nil {
-			return err
-		}
-		for _, name := range []string{"env", "env-browser"} {
-			if err := os.RemoveAll(filepath.Join(oldPython, name)); err != nil {
-				return fmt.Errorf("remove replaced legacy environment %s: %w", name, err)
-			}
-		}
-		if err := os.Remove(oldPython); errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
-			retainedLegacy = true
-			fmt.Fprintf(stdout, "setup: warning: legacy state retained at %s; stop legacy writers and reconcile retained files before manual removal\n", oldPython)
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove healthy replacement's legacy Python root: %w", err)
-		}
+		return fmt.Errorf("new conversion environment is not healthy")
 	}
 	if cfg.Config.Harvester.External.Enabled {
 		if err := ops.service(ctx, cfg); err != nil {
@@ -208,69 +138,20 @@ func run(ctx context.Context, cfg config.Runtime, offline bool, stdout io.Writer
 	if err := ops.ensure(ctx, cfg); err != nil {
 		return fmt.Errorf("ensure persistent harvester daemon: %w", err)
 	}
-	if retainedLegacy {
-		fmt.Fprintln(stdout, "setup: legacy sources retained; verified state copies available")
-	}
-	fmt.Fprintln(stdout, "setup: conversion healthy; state migration complete; gateway service configured; daemon ready")
+	fmt.Fprintln(stdout, "setup: conversion healthy; gateway service configured; daemon ready")
 	return nil
 }
 
-func validateLegacyPython(root string) error {
-	entries, err := os.ReadDir(root)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+func directory(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("inspect legacy Python root: %w", err)
+		return false, err
 	}
-	for _, entry := range entries {
-		switch entry.Name() {
-		case "env", "env-browser", "cache", "models", "cache.harvester-migrated", "models.harvester-migrated":
-		default:
-			return fmt.Errorf("refuse removing legacy Python root with unrecognized entry %s", filepath.Join(root, entry.Name()))
-		}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf("refuse state root that is not a directory: %s", path)
 	}
-	return nil
-}
-
-func rejectOverlappingRoots(source, target string) error {
-	var err error
-	source, err = physicalRoot(source)
-	if err != nil {
-		return err
-	}
-	target, err = physicalRoot(target)
-	if err != nil {
-		return err
-	}
-	for _, pair := range [][2]string{{source, target}, {target, source}} {
-		rel, err := filepath.Rel(pair[0], pair[1])
-		if err != nil {
-			return err
-		}
-		if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
-			return fmt.Errorf("refuse overlapping legacy and replacement Python roots: %s and %s", source, target)
-		}
-	}
-	return nil
-}
-
-func physicalRoot(path string) (string, error) {
-	path = filepath.Clean(path)
-	resolved, err := filepath.EvalSymlinks(path)
-	if err == nil {
-		return resolved, nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("resolve state root %s: %w", path, err)
-	}
-	parent := filepath.Dir(path)
-	if parent == path {
-		return "", fmt.Errorf("resolve state root %s: %w", path, err)
-	}
-	resolved, err = physicalRoot(parent)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(resolved, filepath.Base(path)), nil
+	return true, nil
 }

@@ -12,9 +12,9 @@ Cached handles and external gateway credentials outlive one process: migration c
 - ask: source questions through Claude or Codex executables · `internal/ask/`, `internal/engine/`
 - configuration: `$HARVESTER_CONFIG`, else `${XDG_CONFIG_HOME:-$HOME/.config}/harvester/harvester.config.json` · `internal/config/`
 - state: `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/`, holding python, ask and cache; explicit cache and gateway state paths remain operator-owned · `internal/paths/`
-- daemon: shared engine MCP service with a 0600 `{state}/daemon.sock`, exclusive `{state}/daemon.lock` and `{state}/logs/daemon.log` · `internal/daemon/`
+- daemon: shared engine MCP service with a 0600 `{state}/daemon.sock`, exclusive `{state}/daemon.lock` and `daemon.log` in the log directory, `$PLUGIN_LOG_DIR/harvester`, else `{state}/logs` · `internal/daemon/`
 - stdio proxy: `harvester mcp`, forwarding to daemon with session recovery and uncertain-delivery errors · `internal/daemon/proxy.go`
-- setup: conversion provisioning, legacy state migration and external gateway login service · `internal/setup/`
+- setup: conversion provisioning and external gateway login service · `internal/setup/`
 - doctor: configuration, cache, search and conversion health rows · `internal/doctor/`
 - testjail: isolated process homes and environment for test packages · `internal/testjail/`
 - plugin: the installable manifest, launcher and release checksums · `plugins/harvester/`
@@ -52,7 +52,7 @@ Cached handles and external gateway credentials outlive one process: migration c
 
 ## Data safety
 
-- Preserve cached handles and gateway credentials through state migration; remove a legacy source only after the destination is verified and its environment is healthy.
+- Preserve cached handles and gateway credentials through every state-format change: an older cache entry stays readable, and a stored credential is upgraded in place, never dropped.
 - Run test packages through testjail and keep operator configuration, credentials and state outside fixtures.
 
 ## Interfaces

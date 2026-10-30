@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	pfmconfig "github.com/rezzminator/harvester/internal/config"
-	pfmengine "github.com/rezzminator/harvester/internal/engine"
+	"github.com/rezzminator/harvester/internal/config"
+	"github.com/rezzminator/harvester/internal/engine"
 )
 
 const engineTimeout = 60 * time.Second
@@ -18,7 +18,7 @@ type AskInput struct {
 	ContentFiles []string
 	SourceLabels []string
 	Prompt       string
-	Engine       pfmengine.ID
+	Engine       engine.ID
 	Model        string
 	Effort       string
 	Timeout      time.Duration
@@ -41,7 +41,7 @@ type Engine interface {
 	Run(context.Context, AskInput) (AskResult, error)
 }
 
-func ResolveInput(input AskInput, machine pfmconfig.Config) (AskInput, error) {
+func ResolveInput(input AskInput, machine config.Config) (AskInput, error) {
 	if len(input.ContentFiles) == 0 {
 		return AskInput{}, fmt.Errorf("content files must not be empty")
 	}
@@ -120,18 +120,18 @@ func BuildPrompt(input AskInput) (string, error) {
 	return builder.String(), nil
 }
 
-func ResolveEngine(id pfmengine.ID, machine pfmconfig.Config) (Engine, error) {
+func ResolveEngine(id engine.ID, machine config.Config) (Engine, error) {
 	runner, err := RunnerFor(id)
 	if err != nil {
 		return nil, err
 	}
 	return runner.Resolve(machine)
 }
-func ResolveClaude(machine pfmconfig.Config) (Engine, error) {
-	return resolveProcess(pfmengine.Claude, machine)
+func ResolveClaude(machine config.Config) (Engine, error) {
+	return resolveProcess(engine.Claude, machine)
 }
-func ResolveCodex(machine pfmconfig.Config) (Engine, error) {
-	return resolveProcess(pfmengine.Codex, machine)
+func ResolveCodex(machine config.Config) (Engine, error) {
+	return resolveProcess(engine.Codex, machine)
 }
 
 // claudeModelAliases are the model aliases Claude Code's --model takes for
@@ -144,19 +144,19 @@ const claudeLongContext = "[1m]"
 
 // CheckModel validates the engine family before any source is read. The engine
 // remains the final judge of whether an accepted model id exists.
-func CheckModel(id pfmengine.ID, model string) (string, error) {
-	descriptor, err := pfmengine.Lookup(id)
+func CheckModel(id engine.ID, model string) (string, error) {
+	descriptor, err := engine.Lookup(id)
 	if err != nil {
 		return "", err
 	}
 	model = strings.TrimSpace(model)
-	if alias := strings.ToLower(model); id == pfmengine.Claude && slices.Contains(claudeModelAliases, strings.TrimSuffix(alias, claudeLongContext)) {
+	if alias := strings.ToLower(model); id == engine.Claude && slices.Contains(claudeModelAliases, strings.TrimSuffix(alias, claudeLongContext)) {
 		return alias, nil
 	}
-	if id == pfmengine.Claude && strings.HasPrefix(model, "claude-") || id == pfmengine.Codex && strings.HasPrefix(model, "gpt-") {
+	if id == engine.Claude && strings.HasPrefix(model, "claude-") || id == engine.Codex && strings.HasPrefix(model, "gpt-") {
 		return model, nil
 	}
-	if id == pfmengine.Claude {
+	if id == engine.Claude {
 		return "", fmt.Errorf("model %q is not a claude model: name an alias (%s) or a model id starting claude-", model, strings.Join(claudeModelAliases, ", "))
 	}
 	return "", fmt.Errorf("model %q is not a %s model: name a model id starting gpt-", model, descriptor.LongName)

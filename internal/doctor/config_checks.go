@@ -33,7 +33,6 @@ var RetiredHarvesterEnv = []struct{ Name, Now string }{
 	{"HARVESTER_AUTH_PASSPHRASE", "external.auth.passphrase"},
 	{"HARVESTER_STATIC_TOKEN", "external.auth.staticToken"},
 	{"HARVESTER_LOCAL_ROOTS", ""},
-	{"PFM_HARVEST_PYTHON", ""},
 }
 
 func printHarvesterConfigDoctor(stdout io.Writer, runtime config.Runtime) int {

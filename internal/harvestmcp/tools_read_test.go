@@ -423,8 +423,7 @@ func TestReadAnswersOneTextBlockPerItem(t *testing.T) {
 		},
 		{
 			name: "size only", args: map[string]any{"urls": []string{"https://example.test/clean"}, "include_content": false},
-			want: []string{fmt.Sprintf("=== [1/1] https://example.test/clean\n{path}\nsize: %d chars, ~%d tokens",
-				len([]rune(trimmed)), harvest.EstimateTokens(body))},
+			want: []string{fmt.Sprintf("=== [1/1] https://example.test/clean\n{path}\nsize: %d chars", len([]rune(trimmed)))},
 		},
 		{
 			name: "failed", isError: true, args: map[string]any{"urls": []string{"10.1038/nature14539"}},
@@ -491,5 +490,42 @@ func TestReadWholeCallErrorsAreOneErrorLine(t *testing.T) {
 	if text := allText(result); !result.IsError || result.StructuredContent != nil ||
 		text != "error: read takes at most 50 items in total across urls, files and publications; this call sent 51" {
 		t.Fatalf("51 urls: isError=%v text=%q", result.IsError, text)
+	}
+}
+
+// TestReadAnswerIsNotFittedToATokenBudget: harvester estimates no tokens. Three
+// pages each within the inline character cap, read in one call beside a small
+// page, come back whole even though the answer runs far past Claude Code's MCP
+// output limit: an oversized result is the client's to handle (Claude Code
+// saves it to a file and hands the model its path), never cut here by an
+// estimate.
+func TestReadAnswerIsNotFittedToATokenBudget(t *testing.T) {
+	cacheDir := filepath.Join(t.TempDir(), "cache")
+	page := "# Long page\n\n" + strings.Repeat("Every reading is logged twice. ", 1500)
+	large := []string{"https://example.test/a", "https://example.test/b", "https://example.test/c"}
+	for _, source := range large {
+		seedArtifact(t, cacheDir, source, "", page)
+	}
+	small := "# Small page\n\n" + strings.Repeat("The stilling well agrees with the gauge. ", 6)
+	seedArtifact(t, cacheDir, "https://example.test/small", "", small)
+	session := connectHarvesterInProcess(t, newTestService(t, Runtime{CacheDir: cacheDir}))
+	result, text := callText(t, session, "read", map[string]any{"urls": append(large, "https://example.test/small")})
+	if result.IsError {
+		t.Fatalf("read is an error: %.300s", text)
+	}
+	if strings.Contains(text, "\ntruncated: ") || strings.Contains(text, "[cut: ") {
+		t.Fatalf("read cut an answer whose items all fit the inline character cap:\n%.400s", text)
+	}
+	blocks := strings.Split(text, "\n\n=== ")
+	if len(blocks) != 4 {
+		t.Fatalf("read answered %d blocks, want 4:\n%.400s", len(blocks), text)
+	}
+	for index := range large {
+		if !strings.HasSuffix(blocks[index], strings.TrimSpace(page)) {
+			t.Errorf("block %d is not its whole page:\n%.300s", index+1, blocks[index])
+		}
+	}
+	if !strings.HasSuffix(blocks[3], strings.TrimSpace(small)) {
+		t.Errorf("the small page is not whole:\n%s", blocks[3])
 	}
 }

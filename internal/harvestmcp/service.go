@@ -96,7 +96,7 @@ type Runtime struct {
 	// resource template.
 	Remote bool
 
-	// Machine is the pfm config read's ask runs its engine under (accounts,
+	// Machine is the harvester config read's ask runs its engine under (accounts,
 	// binaries, ask preferences); nil on a harvester that answers no ask.
 	Machine *config.Config
 	// MaxDownloadBytes is harvest.maxDownloadBytes; MaxResourceBytes is
@@ -390,7 +390,7 @@ func (converter pythonConverter) Convert(
 		extension = kind
 	}
 	return converter.convertScratch(
-		ctx, "conversion", "pfm-harvest-input-", extension, body,
+		ctx, "conversion", "harvester-input-", extension, body,
 		harvestpy.Request{Kind: kind, Source: source},
 	)
 }
@@ -403,7 +403,7 @@ func (converter pythonConverter) ConvertOCR(
 	body []byte,
 ) (string, error) {
 	return converter.convertScratch(
-		ctx, "OCR", "pfm-harvest-ocr-", strings.TrimPrefix(filepath.Ext(source), "."), body,
+		ctx, "OCR", "harvester-ocr-", strings.TrimPrefix(filepath.Ext(source), "."), body,
 		harvestpy.Request{Kind: kind, Source: source, OCR: true},
 	)
 }
@@ -417,7 +417,7 @@ func (converter pythonConverter) ConvertFullDOM(
 	body []byte,
 ) (string, error) {
 	return converter.convertScratch(
-		ctx, "full-DOM conversion", "pfm-harvest-fulldom-", "html", body,
+		ctx, "full-DOM conversion", "harvester-fulldom-", "html", body,
 		harvestpy.Request{Kind: "html", Source: source, FullDOM: true},
 	)
 }
@@ -494,7 +494,7 @@ func (service *Service) Close() error {
 }
 
 // Instructions is this service's routing text: the harvester part every
-// professor server composes from.
+// server carrying these tools composes from.
 func (service *Service) Instructions() string {
 	return serverInstructions(runtimeSearchEnabled(service.runtime), service.runtime.Remote)
 }
@@ -509,7 +509,7 @@ func (service *Service) ToolNames() []string {
 // server, the download resource template. Every tool answers text alone: its
 // handler's output type is any and it returns none, so the SDK advertises no
 // output schema and sends no structuredContent. RegisteredToolNames
-// (toolnames.go) moves with it. Every professor server carrying the harvester
+// (toolnames.go) moves with it. Every server carrying the harvester
 // family registers through here, bound to this one service; each tool's
 // context also ends when its HTTP client disconnects (untilClientGone).
 func (service *Service) RegisterTools(server *mcp.Server) {

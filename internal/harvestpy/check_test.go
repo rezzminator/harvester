@@ -111,7 +111,7 @@ func readyFixtureEnvironment(t *testing.T, root string, platform Platform, sourc
 
 // TestCheckRejectsAnEnvironmentBuiltFromAnOlderConverterSource pins the
 // upgrade hole the browser environment already closes (BrowserEnvironmentStale)
-// and the conversion environment did not: an environment an older pfm
+// and the conversion environment did not: an environment an older harvester
 // provisioned is self-consistent — record, on-disk converter.py and digest
 // all agree — so every existing check passes and `harvester setup` takes its
 // Check fast-path, leaving the OLD converter.py in service under a binary
@@ -120,7 +120,7 @@ func readyFixtureEnvironment(t *testing.T, root string, platform Platform, sourc
 func TestCheckRejectsAnEnvironmentBuiltFromAnOlderConverterSource(t *testing.T) {
 	root := t.TempDir()
 	platform := Platform{GOOS: "linux", GOARCH: "amd64"}
-	older := append([]byte("# an older pfm's converter\n"), ConverterSource()...)
+	older := append([]byte("# an older harvester's converter\n"), ConverterSource()...)
 	readyFixtureEnvironment(t, root, platform, older)
 	report, err := CheckConversionEnvironment(context.Background(), root, platform)
 	if err == nil || report.Healthy {
@@ -140,7 +140,7 @@ func TestCheckRejectsAnEnvironmentBuiltFromAnOlderConverterSource(t *testing.T) 
 
 // TestCheckAcceptsAnEnvironmentBuiltFromTheEmbeddedConverterSource is the
 // healthy half of the stale-converter check: an environment provisioned from
-// this pfm's own converter source and lock passes source_current.
+// this harvester's own converter source and lock passes source_current.
 func TestCheckAcceptsAnEnvironmentBuiltFromTheEmbeddedConverterSource(t *testing.T) {
 	root := t.TempDir()
 	platform := Platform{GOOS: "linux", GOARCH: "amd64"}

@@ -473,7 +473,7 @@ func TestDoctorHarvestBrowserRowDistinguishesItsBrokenStates(t *testing.T) {
 	})
 
 	root = newRoot()
-	t.Run("gate on with a worker provisioned by an older pfm reports SOURCE STALE", func(t *testing.T) {
+	t.Run("gate on with a worker provisioned by an older harvester reports SOURCE STALE", func(t *testing.T) {
 		liveChrome := filepath.Join(t.TempDir(), "live-chrome")
 		if err := testjail.WriteExecutable(liveChrome, []byte("#!/bin/sh\n"), 0o700); err != nil {
 			t.Fatal(err)
@@ -486,7 +486,7 @@ func TestDoctorHarvestBrowserRowDistinguishesItsBrokenStates(t *testing.T) {
 		writeProvisionedBrowserEnv(t, root, platform, digest)
 		// Record and disk agree with EACH OTHER (no tamper) but not with
 		// the worker this binary embeds — the state an upgrade leaves.
-		older := []byte("# browser worker from an older pfm\n")
+		older := []byte("# browser worker from an older harvester\n")
 		envDir := harvestpy.BrowserRuntimeRoot(root, platform)
 		if err := os.WriteFile(filepath.Join(envDir, "project", "browser.py"), older, 0o600); err != nil {
 			t.Fatal(err)
@@ -507,7 +507,7 @@ func TestDoctorHarvestBrowserRowDistinguishesItsBrokenStates(t *testing.T) {
 		var output strings.Builder
 		warnings := appendHarvestBrowserDoctorRow(ctx, &output, root, platform, true)
 		if !strings.Contains(output.String(), "SOURCE_STALE") || strings.Contains(output.String(), "source_hash=ok") {
-			t.Fatalf("an older pfm's worker read as current: %q", output.String())
+			t.Fatalf("an older harvester's worker read as current: %q", output.String())
 		}
 		// Self-healing on the next browser fetch: named, never an update-blocking warning.
 		if warnings != 0 {

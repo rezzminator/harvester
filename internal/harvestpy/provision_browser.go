@@ -132,7 +132,7 @@ func provisionBrowserWithTargets(
 	current := BrowserRuntimeRoot(options.Root, platform)
 	envRoot := filepath.Join(options.Root, "env-browser", platform.String())
 	// Single-flight from here on: reuse check, downloads, build and swap all
-	// touch this root, and a second pfm converging it at the same time is how
+	// touch this root, and a second harvester converging it at the same time is how
 	// one of them reads a tree the other is halfway through replacing.
 	release, err := lockProvisionRoot(ctx, envRoot)
 	if err != nil {
@@ -324,8 +324,8 @@ var ensureProvision = ProvisionBrowser
 
 // EnsureBrowser resolves the browser worker's runtime for one fetch,
 // provisioning first when the environment is missing, its record unreadable,
-// or it is stale. Presence alone is not enough: an environment an older pfm
-// provisioned keeps its interpreter, and running it runs THAT pfm's worker.
+// or it is stale. Presence alone is not enough: an environment an older harvester
+// provisioned keeps its interpreter, and running it runs THAT harvester's worker.
 // An empty Platform{} stringifies to "-", a path provisioning never writes,
 // so the platform is always normalized. It NEVER downloads Chromium.
 func EnsureBrowser(ctx context.Context, options ProvisionOptions) (Runtime, error) {
@@ -366,7 +366,7 @@ func EnsureBrowser(ctx context.Context, options ProvisionOptions) (Runtime, erro
 // built from a different worker source or lock than this binary embeds, or
 // returns "" when it is current. An upgrade leaves the old environment
 // intact — interpreter present, record and on-disk worker agreeing with each
-// other — so only this comparison sees that the worker is not this pfm's.
+// other — so only this comparison sees that the worker is not this harvester's.
 func BrowserEnvironmentStale(digest EnvironmentDigest) string {
 	var drift []string
 	if digest.SourceSHA256 != browserSourceSHA256() {
@@ -382,7 +382,7 @@ func BrowserEnvironmentStale(digest EnvironmentDigest) string {
 }
 
 // BrowserSourceState is doctor's source_hash value: "ok" for a current
-// environment, SOURCE_STALE naming the drift for one an older pfm left behind.
+// environment, SOURCE_STALE naming the drift for one an older harvester left behind.
 func BrowserSourceState(digest EnvironmentDigest) string {
 	if reason := BrowserEnvironmentStale(digest); reason != "" {
 		return "SOURCE_STALE(" + reason + "; the next browser fetch re-provisions it)"

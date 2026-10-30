@@ -1,5 +1,5 @@
 [project]
-name = "pfm-harvest-browser"
+name = "harvester-browser"
 version = "0.1.0"
 description = "Opt-in real-browser rung (Patchright + system Chrome) for the harvest wall-bypass ladder."
 requires-python = "==3.11.*"

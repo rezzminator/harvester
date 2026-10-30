@@ -1,8 +1,8 @@
 """Chrome launcher seam test — runs with NO browser and NO patchright.
 
 On macOS the TCC "responsible process" of a Chrome this worker launches is the
-`pfm` binary, and tccd refuses Chrome's touch of its own app bundle as pfm
-modifying apps. The worker therefore points patchright at a wrapper that
+`harvester` binary, and tccd refuses Chrome's touch of its own app bundle as
+harvester modifying apps. The worker therefore points patchright at a wrapper that
 posix_spawns the real Chrome with responsibility disclaimed (browser.py
 chrome_launcher_main). These cases pin what that wrapper must keep: Chrome's
 arguments, environment and inherited descriptors, its exit status and the
@@ -193,9 +193,9 @@ def test_launcher_passes_argv_and_env_to_chrome_unchanged():
         out = os.path.join(tmp, "seen.json")
         how, status = launch(tmp, f"""
             import json, os, sys
-            json.dump({{"argv": sys.argv[1:], "env": os.environ.get("PFM_LAUNCHER_PROBE")}}, open({out!r}, "w"))
+            json.dump({{"argv": sys.argv[1:], "env": os.environ.get("LAUNCHER_PROBE")}}, open({out!r}, "w"))
             """, ["--remote-debugging-pipe", "--user-data-dir=/profiles/a b", "--headless"],
-                            env={"PFM_LAUNCHER_PROBE": "kept"})
+                            env={"LAUNCHER_PROBE": "kept"})
         seen = json.load(open(out))
     assert how == ("exit", 0), how
     assert seen == {"argv": ["--remote-debugging-pipe", "--user-data-dir=/profiles/a b", "--headless"],
@@ -435,10 +435,10 @@ def test_wrapper_runs_chrome_with_its_arguments_environment_descriptors_and_exit
             process, status = run_wrapper(tmp, f"""
                 import os, sys
                 os.write({write_end}, b"fd ok")
-                print(" ".join(sys.argv[1:]), os.environ["PFM_LAUNCHER_PROBE"])
+                print(" ".join(sys.argv[1:]), os.environ["LAUNCHER_PROBE"])
                 sys.exit(5)
                 """, ["--remote-debugging-pipe", "--proxy-server=http://127.0.0.1:1"],
-                                          env={"PFM_LAUNCHER_PROBE": "env ok"}, pass_fds=(write_end,))
+                                          env={"LAUNCHER_PROBE": "env ok"}, pass_fds=(write_end,))
         os.close(write_end)
         write_end = None
         assert process.returncode == 5, (process.returncode, process.stderr)

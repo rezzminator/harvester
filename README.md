@@ -3,6 +3,7 @@
 ## Contents
 
 - [Commands](#commands)
+  - [Read output](#read-output)
 - [Install and register](#install-and-register)
 - [Configuration and state](#configuration-and-state)
 - [Development](#development)
@@ -25,8 +26,8 @@ The `harvester` executable supports these entry points:
   per-user `harvester serve` daemon.
 - `harvester serve` hosts the persistent Harvester services and optional
   authenticated external MCP gateway.
-- `harvester setup [--offline]` provisions conversion support and migrates
-  legacy Harvester state.
+- `harvester setup [--offline]` provisions conversion support and refreshes the
+  daemon.
 - `harvester doctor [--json] [--skip-conversion]` checks Harvester's runtime
   and services.
 - `harvester config path|show` prints the config path or effective Harvester
@@ -51,6 +52,22 @@ Engine clients expose those tools under these names:
 - **OpenCode:** `harvester_read`, `harvester_search_web`,
   `harvester_search_literature`, `harvester_download_file`
 
+### Read output
+
+`read` answers one text block per item. Each item shows its content up to
+`output.maxInlineChars` characters (default 50,000); a longer item carries a
+`truncated: {shown} of {total} chars, full text at the path` line, and its
+whole artifact sits at the absolute path on the block's second line, ready
+to read in pages. `include_content: false` replaces the content with a
+`size: {chars} chars` line.
+
+Harvester counts and estimates no tokens, and never cuts an answer to fit a
+client's output limit: an answer over that limit is the client's to handle.
+Claude Code saves an MCP result over its limit (`MAX_MCP_OUTPUT_TOKENS`,
+default 25,000 tokens) to a file and gives the model that file's path in
+place of the content. The `--json` results carry `chars`, never a token
+count, and artifacts carry no `token_count` frontmatter.
+
 ## Install and register
 
 Install the native plugin for each engine you use:
@@ -58,15 +75,15 @@ Install the native plugin for each engine you use:
 - **Claude Code:**
 
   ```sh
-  claude plugin marketplace add rezzminator/harvester
-  claude plugin install harvester@harvester
+  claude plugin marketplace add rezzminator/professor
+  claude plugin install harvester@professor
   ```
 
 - **Codex:**
 
   ```sh
   codex plugin marketplace add rezzminator/harvester
-  codex plugin add harvester@harvester
+  codex plugin add harvester@professor
   ```
 
 - **OpenCode:** clone the repository, then install its plugin directory:
@@ -77,7 +94,8 @@ Install the native plugin for each engine you use:
   opencode plugin --global "file://$PWD/plugins/harvester"
   ```
 
-The Claude and Codex plugin marketplaces are listed at the repository root.
+The Claude plugin installs from Professor's marketplace; the Codex marketplace,
+named `professor`, is listed at the repository root.
 OpenCode loads the packaged plugin's config hook, which registers `mcp.harvester`
 only when no explicit entry already exists. The plugin uses the same launcher
 and `harvester mcp` command on all engines.
@@ -85,7 +103,7 @@ and `harvester mcp` command on all engines.
 Codex registers MCP through `plugins/harvester/.codex-plugin/plugin.json`,
 which points to `plugins/harvester/mcp.json`. The MCP entry runs the contained
 `./libexec/harvester mcp` command with the installed plugin directory as its
-working directory and forwards the configured Harvester, XDG, logging, and
+working directory and forwards the configured Harvester, XDG, logging (including `PLUGIN_LOG_DIR`), and
 proxy environment names.
 
 For an engine without the plugin, build or install the standalone executable
@@ -123,7 +141,7 @@ the Unix socket `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/daemon.sock`
 (mode `0600`) and owns retrieval, conversion, browser workers, and cache
 services. Its singleton lock is
 `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/daemon.lock` (mode `0600`);
-the daemon log is `.../harvester/logs/daemon.log` (mode `0600`). A proxy starts
+the daemon's captured output is `daemon.log` (mode `0600`) in the log directory described under Logging. A proxy starts
 it detached on demand; it remains running after clients exit. It checks the
 installed binary's version once per session and again on a daemon reconnect; it
 also rechecks a binary replaced during startup. An older proxy accepts a newer
@@ -145,17 +163,28 @@ service.
 
 The config path is `HARVESTER_CONFIG` when set, otherwise
 `${XDG_CONFIG_HOME:-$HOME/.config}/harvester/harvester.config.json`. Harvester
-keeps its conversion environment, ask state, cache, OAuth state, and logs under
-`${XDG_STATE_HOME:-$HOME/.local/state}/harvester/`. Setup can import Harvester
-settings and state from their legacy locations; an existing plugin config and
-explicit cache or gateway state paths remain in use. This import runs inside
-Harvester and does not require PFM to install or configure the plugin.
+keeps its conversion environment, ask state, cache, and OAuth state under
+`${XDG_STATE_HOME:-$HOME/.local/state}/harvester/`; explicit cache or gateway
+state paths in the config remain in use.
 
-Cross-filesystem migration verifies its copy and rescans for late writes; if the
-legacy directory is retained and setup warns, it uses extra disk space, so stop
-legacy writers and reconcile retained files before removing it manually. A
-destination conflict never overwrites the published entry; setup retains the
-legacy and destination entries for manual reconciliation.
+### Logging
+
+Harvester writes its activity log to `$PLUGIN_LOG_DIR/harvester/` when
+`PLUGIN_LOG_DIR` is set, otherwise to `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/logs/`;
+no Harvester variable or config key moves it, and the daemon's `daemon.log`
+sits beside the level files. The directory is `0700`. A record goes to
+`errors.jsonl`, `warnings.jsonl`, `info.jsonl` or `debug.jsonl` (`0600`) as one
+JSON row whose keys are `ts`, `plugin`, `level`, `event`, `msg`, `where`,
+`session` when known, and `detail`, at most 4096 bytes; the event is the
+record's message, `msg` its `err` field when it has one, `where` its component
+(else its command), and `detail` its other scrubbed fields. A level file past
+20 MiB moves to `{file}.1`, older generations shifting up to `{file}.5`, and a
+`log-capped` row goes to `warnings.jsonl`. A row that cannot be written is held
+for the next write, which writes it first. The screen shows an error as one
+line and, once per failing streak, that the log cannot be written and how many
+rows are held; nothing else is printed. `HARVESTER_LOG_LEVEL` and `HARVESTER_LOG_COMPONENTS`
+still choose which records are written. A log left by an earlier version
+(`harvester.jsonl` and its `.lock`) is not read or removed.
 
 ## Development
 

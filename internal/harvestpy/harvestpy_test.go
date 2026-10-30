@@ -142,7 +142,7 @@ func TestEmbeddedLockKeepsEveryResolvedConversionPackageAtOracleVersions(t *test
 		)
 	}
 	for name, versions := range embeddedVersions {
-		if name == "professor-harvestpy" {
+		if name == "harvester-convert" {
 			continue
 		}
 		for _, version := range versions {

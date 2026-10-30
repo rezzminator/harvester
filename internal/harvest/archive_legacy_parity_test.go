@@ -2,8 +2,7 @@ package harvest
 
 // This file is the Go regression oracle for the RETIRED Python harvester's
 // test_dispatch_hardening.py case that a binary OA candidate is never cached
-// as text (harvester/ was deleted after full migration to pfm; read that suite
-// at its last tracked revision, `git show 4edf9c5^:harvester/tests/...`). The
+// as text (that Python suite was retired after its migration to Go). The
 // archive member readers it once also pinned are gone: a zip is a download.
 
 import (

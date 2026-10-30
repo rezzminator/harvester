@@ -11,7 +11,7 @@ import (
 )
 
 // TestLockProvisionRootSerializesTwoHolders is half of L2-F23: nothing in the
-// package held a lock, so two pfm processes converged the same environment
+// package held a lock, so two harvester processes converged the same environment
 // tree at once.
 func TestLockProvisionRootSerializesTwoHolders(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "env-browser", "linux-amd64")
@@ -79,7 +79,7 @@ func TestLockProvisionRootGivesUpWithItsContext(t *testing.T) {
 // TestProvisionWaitsForTheLock is the conversion-environment sibling of
 // TestProvisionBrowserWaitsForTheLock below: Provision (the docling/pymupdf
 // closure) took no lock at all — only the browser provisioner did — so two
-// pfm processes converging the SAME conversion root at once each read a tree
+// harvester processes converging the SAME conversion root at once each read a tree
 // the other was halfway through replacing.
 func TestProvisionWaitsForTheLock(t *testing.T) {
 	root := t.TempDir()

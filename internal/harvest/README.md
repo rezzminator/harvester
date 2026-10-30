@@ -1,6 +1,6 @@
 # Harvester
 
-Harvester reads `harvester.config.json` beside `pfm.config.json`. CLI fetches and both MCP gateways use the same retrieval core. `pfm config show` is the operator view of effective settings. Long-running servers load settings at startup and need a restart after configuration changes.
+Harvester reads `harvester.config.json` at the path `harvester config path` prints. CLI fetches and both MCP gateways use the same retrieval core. `harvester config show` is the operator view of effective settings. Long-running servers load settings at startup and need a restart after configuration changes.
 
 ## Scholarly providers
 
@@ -24,7 +24,7 @@ CLI, MCP tools, and `harvest ask` return exported artifacts. Retrieval methods, 
 
 Complete exported Markdown and binary artifacts live under `<cache>/public/` with hashed filenames and private filesystem permissions. Inline limits do not truncate the saved document.
 
-An exported Markdown artifact opens with frontmatter and its body is the document alone. The frontmatter keys, in order: `source`, `request`, `field`, `url` (an http(s) address, never a mirror's), `kind`, `via`, `http_status`, `fetched_at`, `title`, `author`, `published`, `license`, `chars`, `token_count`, `gaps` (why the artifact is incomplete, `; `-joined), `transformed` (`json-outline` when JSON was rendered as an outline). Every value is escaped (`%`, CR and LF as `%25`, `%0D`, `%0A`), so a page's own title or author never writes a second key. The private cache writes the same keys plus `method`, `rungs` and `site`, through the same writer (`frontmatter.go`). An artifact whose body opens with a partial banner or a metadata block (the older layout) still reads: both lift into its facts on read.
+An exported Markdown artifact opens with frontmatter and its body is the document alone. The frontmatter keys, in order: `source`, `request`, `field`, `url` (an http(s) address, never a mirror's), `kind`, `via`, `http_status`, `fetched_at`, `title`, `author`, `published`, `license`, `chars`, `gaps` (why the artifact is incomplete, `; `-joined), `transformed` (`json-outline` when JSON was rendered as an outline). Every value is escaped (`%`, CR and LF as `%25`, `%0D`, `%0A`), so a page's own title or author never writes a second key. The private cache writes the same keys plus `method`, `rungs` and `site`, through the same writer (`frontmatter.go`). An artifact whose body opens with a partial banner or a metadata block (the older layout) still reads: both lift into its facts on read.
 
 The read tool and `harvester` print each artifact as one block: `=== [n/N] {item}`, its path, a `partial:` or `truncated:` line when incomplete, then the body. Internal cache entries, handle mappings, and telemetry cannot be fetched through public Harvester calls, including through symlinks. The authenticated external gateway confines local reads to exported artifacts.
 

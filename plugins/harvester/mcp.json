@@ -18,7 +18,7 @@
         "XDG_DATA_HOME",
         "HARVESTER_LOG_LEVEL",
         "HARVESTER_LOG_COMPONENTS",
-        "HARVESTER_LOG_MIRROR",
+        "PLUGIN_LOG_DIR",
         "HTTP_PROXY",
         "HTTPS_PROXY",
         "NO_PROXY",
