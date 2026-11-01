@@ -73,7 +73,14 @@ func TestDoctorHelpExitStatus(t *testing.T) {
 
 func externalRuntime(t *testing.T) config.Runtime {
 	t.Helper()
-	home := t.TempDir()
+	// A short home: serve binds {state}/daemon.sock before the gateway, and the jail's state root
+	// under a long temp dir (macOS's /var/folders/…/T) passes the unix socket path limit.
+	home, err := os.MkdirTemp("", "hg-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "s"))
 	cfg := config.Config{Harvester: config.DefaultHarvester()}
 	cfg.Harvester.Cache.Dir = filepath.Join(home, "cache")
 	cfg.Harvester.External = config.HarvesterExternal{Enabled: true, Host: "127.0.0.1", PublicURL: "https://harvester.example.test", StaticToken: "example-gateway-token", StateDir: filepath.Join(home, "auth")}

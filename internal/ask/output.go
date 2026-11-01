@@ -138,8 +138,10 @@ func parseCodexJSONL(result *processOutput) error {
 				Type string `json:"type"`
 				Text string `json:"text"`
 			}
+			// An item that does not decode costs that item, like a line that is no event.
 			if err := json.Unmarshal(event.Item, &item); err != nil {
-				return fmt.Errorf("parse Codex completed item: %w", err)
+				result.Warnings = append(result.Warnings, fmt.Sprintf("skip Codex item in event %d: %v", lineNo+1, err))
+				continue
 			}
 			if item.Type == "agent_message" {
 				result.Answer = item.Text

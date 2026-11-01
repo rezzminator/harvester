@@ -34,6 +34,8 @@ func TestOutputPreservesSessionUsageAndRefusesIncompleteAnswers(t *testing.T) {
 				"skip Codex event 3: it has no type",
 				"parse Codex usage: input_tokens: json: cannot unmarshal string into Go value of type int; usage unknown",
 			}},
+		{engine.Codex, "{\"type\":\"item.completed\",\"item\":\"unreadable\"}\n{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"answer\"}}\n{\"type\":\"turn.completed\"}",
+			nil, []string{"skip Codex item in event 1: json: cannot unmarshal string into Go value of type struct { Type string \"json:\\\"type\\\"\"; Text string \"json:\\\"text\\\"\" }"}},
 	} {
 		output := processOutput{Stdout: tc.raw}
 		if err := parseOutput(&output, tc.id); err != nil || output.Answer != "answer" ||

@@ -159,21 +159,31 @@ func TestCanonicalPublicPathResolvesSymlinksAndTolerantOfMissingTail(t *testing.
 
 func TestHarvesterWritePublicFileRefusesPathOutsidePublicNamespace(t *testing.T) {
 	setHarvestTestJail(t)
-	cacheDir := t.TempDir()
+	// The cache root is a link, as a temp or linked home is (macOS's /var -> /private/var): the
+	// public root resolves through it, the artifact paths the store builds do not.
+	cacheDir := filepath.Join(t.TempDir(), "cache-link")
+	if err := os.Symlink(t.TempDir(), cacheDir); err != nil {
+		t.Fatal(err)
+	}
 	h := mustNew(t, Options{CacheDir: cacheDir})
 
-	// A path inside the public namespace is written successfully.
+	// A path inside the public namespace is written successfully, named canonically or through
+	// the linked cache root.
 	publicRoot, err := h.publicRoot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	insidePath := filepath.Join(publicRoot, "artifact.txt")
-	if err := h.writePublicFile(insidePath, []byte("public content")); err != nil {
-		t.Fatalf("writePublicFile(inside public namespace) error: %v", err)
-	}
-	got, err := os.ReadFile(insidePath)
-	if err != nil || string(got) != "public content" {
-		t.Fatalf("writePublicFile did not persist the expected content: data=%q err=%v", got, err)
+	for _, insidePath := range []string{
+		filepath.Join(publicRoot, "artifact.txt"),
+		filepath.Join(cacheDir, publicDirName, "linked-artifact.txt"),
+	} {
+		if err := h.writePublicFile(insidePath, []byte("public content")); err != nil {
+			t.Fatalf("writePublicFile(%s inside public namespace) error: %v", insidePath, err)
+		}
+		got, err := os.ReadFile(insidePath)
+		if err != nil || string(got) != "public content" {
+			t.Fatalf("writePublicFile did not persist the expected content at %s: data=%q err=%v", insidePath, got, err)
+		}
 	}
 
 	// A path outside the public namespace (directly under the cache root,
@@ -193,9 +203,14 @@ func TestHarvesterWritePublicFileRefusesPathOutsidePublicNamespace(t *testing.T)
 	if err := os.Symlink(outsideDir, linkPath); err != nil {
 		t.Fatal(err)
 	}
-	viaLink := filepath.Join(linkPath, "leak.txt")
-	if err := h.writePublicFile(viaLink, []byte("must not land here either")); err == nil {
-		t.Fatal("writePublicFile did not refuse a symlinked escape under the public namespace")
+	for _, viaLink := range []string{
+		filepath.Join(linkPath, "leak.txt"),
+		filepath.Join(cacheDir, publicDirName, "escape-link", "leak.txt"),
+	} {
+		err := h.writePublicFile(viaLink, []byte("must not land here either"))
+		if want := "public artifact path is not a safe namespace"; err == nil || err.Error() != want {
+			t.Fatalf("writePublicFile(%s) through a link planted in the public namespace: err=%v, want %q", viaLink, err, want)
+		}
 	}
 	entries, err := os.ReadDir(outsideDir)
 	if err != nil {

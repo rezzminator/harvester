@@ -184,67 +184,92 @@ func TestProvisionBrowserWaitsForTheLock(t *testing.T) {
 // TestProvisionBrowserKeepsCurrentValidWhenTheRebuildDies is the other half of
 // L2-F23: ProvisionBrowser did os.RemoveAll(final) at the path `current`
 // already pointed to, so a crash — or a concurrent fetch — met a
-// half-destroyed environment where a working one used to be.
+// half-destroyed environment where a working one used to be. The root is a
+// link (macOS's /var -> /private/var): a live tree that is itself a staged
+// rebuild is never cleared as an abandoned attempt.
 func TestProvisionBrowserKeepsCurrentValidWhenTheRebuildDies(t *testing.T) {
-	root := t.TempDir()
-	platform := Platform{GOOS: "linux", GOARCH: "amd64"}
-	targets, cache := fakeProvisionInputs(t, root, platform)
-	options := func(run RunFunc, smoke SmokeFunc) ProvisionOptions {
-		return ProvisionOptions{
-			Root: root, Cache: cache, Platform: platform,
-			Download: func(_ context.Context, url, _ string) error {
-				return fmt.Errorf("unit provisioning hit the network (%s)", url)
-			},
-			Run:   run,
-			Smoke: smoke,
-		}
-	}
-	first, err := provisionBrowserWithTargets(
-		context.Background(),
-		options(fakeProvisionRun(t, false), fakeBrowserSmoke()),
-		targets,
-	)
-	if err != nil {
-		t.Fatalf("first browser provisioning failed: %v", err)
-	}
-	current := BrowserRuntimeRoot(root, platform)
-	live, err := filepath.EvalSymlinks(current)
-	if err != nil {
-		t.Fatalf("current pointer does not resolve after the first provision: %v", err)
-	}
-
-	// Second run at the SAME digest — the repair path EnsureBrowser takes when
-	// the live environment stops answering its smoke — and it dies partway
-	// through the rebuild.
-	_, err = provisionBrowserWithTargets(context.Background(), options(
-		func(ctx context.Context, executable string, arguments []string, directory string) ([]byte, error) {
-			if len(arguments) > 0 && arguments[0] == "sync" {
-				return nil, errors.New("uv sync died mid-rebuild")
+	for _, tc := range []struct {
+		name     string
+		rebuilds int
+	}{
+		{name: "the live tree is the digest directory"},
+		{name: "the live tree is a staged rebuild", rebuilds: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "root-link")
+			if err := os.Symlink(t.TempDir(), root); err != nil {
+				t.Fatal(err)
 			}
-			return fakeProvisionRun(t, false)(ctx, executable, arguments, directory)
-		},
-		func(context.Context, Runtime) (map[string]any, error) {
-			return nil, errors.New("the live browser environment stopped answering its smoke")
-		}), targets)
-	if err == nil {
-		t.Fatal("a failed rebuild reported success")
-	}
+			platform := Platform{GOOS: "linux", GOARCH: "amd64"}
+			targets, cache := fakeProvisionInputs(t, root, platform)
+			options := func(run RunFunc, smoke SmokeFunc) ProvisionOptions {
+				return ProvisionOptions{
+					Root: root, Cache: cache, Platform: platform,
+					Download: func(_ context.Context, url, _ string) error {
+						return fmt.Errorf("unit provisioning hit the network (%s)", url)
+					},
+					Run:   run,
+					Smoke: smoke,
+				}
+			}
+			first, err := provisionBrowserWithTargets(
+				context.Background(),
+				options(fakeProvisionRun(t, false), fakeBrowserSmoke()),
+				targets,
+			)
+			if err != nil {
+				t.Fatalf("first browser provisioning failed: %v", err)
+			}
+			current := BrowserRuntimeRoot(root, platform)
+			for range tc.rebuilds {
+				// Break the live tree so the reuse check rebuilds it beside itself.
+				if err := os.Remove(filepath.Join(current, "project", "browser.py")); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := provisionBrowserWithTargets(context.Background(),
+					options(fakeProvisionRun(t, false), fakeBrowserSmoke()), targets); err != nil {
+					t.Fatalf("browser rebuild failed: %v", err)
+				}
+			}
+			live, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				t.Fatalf("current pointer does not resolve after provisioning: %v", err)
+			}
 
-	resolved, err := filepath.EvalSymlinks(current)
-	if err != nil {
-		t.Fatalf("current pointer dangles after a failed rebuild: %v", err)
-	}
-	if resolved != live {
-		t.Fatalf("current moved off the working environment during a failed rebuild: %s, was %s", resolved, live)
-	}
-	for _, relative := range []string{"environment.json", filepath.Join("project", "browser.py")} {
-		if _, statErr := os.Stat(filepath.Join(current, relative)); statErr != nil {
-			t.Fatalf("a failed rebuild destroyed the live environment's %s: %v", relative, statErr)
-		}
-	}
-	if digest, inspectErr := InspectBrowser(root, platform); inspectErr != nil || digest.Digest != first.Digest {
-		t.Fatalf("InspectBrowser after a failed rebuild = %v (digest %q, want %q)",
-			inspectErr, digest.Digest, first.Digest)
+			// Another run at the SAME digest — the repair path EnsureBrowser takes when
+			// the live environment stops answering its smoke — and it dies partway
+			// through the rebuild.
+			_, err = provisionBrowserWithTargets(context.Background(), options(
+				func(ctx context.Context, executable string, arguments []string, directory string) ([]byte, error) {
+					if len(arguments) > 0 && arguments[0] == "sync" {
+						return nil, errors.New("uv sync died mid-rebuild")
+					}
+					return fakeProvisionRun(t, false)(ctx, executable, arguments, directory)
+				},
+				func(context.Context, Runtime) (map[string]any, error) {
+					return nil, errors.New("the live browser environment stopped answering its smoke")
+				}), targets)
+			if err == nil {
+				t.Fatal("a failed rebuild reported success")
+			}
+
+			resolved, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				t.Fatalf("current pointer dangles after a failed rebuild: %v", err)
+			}
+			if resolved != live {
+				t.Fatalf("current moved off the working environment during a failed rebuild: %s, was %s", resolved, live)
+			}
+			for _, relative := range []string{"environment.json", filepath.Join("project", "browser.py")} {
+				if _, statErr := os.Stat(filepath.Join(current, relative)); statErr != nil {
+					t.Fatalf("a failed rebuild destroyed the live environment's %s: %v", relative, statErr)
+				}
+			}
+			if digest, inspectErr := InspectBrowser(root, platform); inspectErr != nil || digest.Digest != first.Digest {
+				t.Fatalf("InspectBrowser after a failed rebuild = %v (digest %q, want %q)",
+					inspectErr, digest.Digest, first.Digest)
+			}
+		})
 	}
 }
 

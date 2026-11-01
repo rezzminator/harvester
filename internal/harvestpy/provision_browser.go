@@ -52,6 +52,13 @@ const browserRebuildSuffix = ".rebuild-"
 // concurrent fetch never reads a half-deleted tree. A leftover nothing points
 // at is unreachable and is cleared in place.
 func browserBuildTarget(envRoot, current, desired string, now clock.Clock) (build, replaced string, err error) {
+	// live below is canonical, so every path compared with it is too: under a linked root (macOS's
+	// /var -> /private/var) a lexical attempt never equals live, and the live tree was cleared.
+	canonicalRoot, err := filepath.EvalSymlinks(envRoot)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve browser environment root %s: %w", envRoot, err)
+	}
+	envRoot = canonicalRoot
 	want := filepath.Join(envRoot, desired)
 	live := ""
 	if resolved, resolveErr := filepath.EvalSymlinks(current); resolveErr == nil {

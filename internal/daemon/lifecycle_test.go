@@ -288,6 +288,44 @@ func TestDaemonRefusesUnsafeSocketAndHeldUnresponsiveLock(t *testing.T) {
 	}
 }
 
+// TestDaemonSocketPathLimitMatchesTheKernel: a socket path the kernel cannot
+// bind (sun_path: 104 bytes on macOS, 108 on Linux, its NUL included) is
+// refused by name, never left to bind's bare "invalid argument"; the longest
+// path the kernel binds passes.
+func TestDaemonSocketPathLimitMatchesTheKernel(t *testing.T) {
+	base, err := os.MkdirTemp("", "hs-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(base) })
+	limit := len(syscall.RawSockaddrUnix{}.Path)
+	for _, length := range []int{limit - 1, limit} {
+		dir := filepath.Join(base, strings.Repeat("d", length-len(base)-len("/")-len("/daemon.sock")))
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		socket := filepath.Join(dir, "daemon.sock")
+		if len(socket) != length {
+			t.Fatalf("fixture socket path is %d bytes, want %d: %s", len(socket), length, socket)
+		}
+		guardErr := checkSocketPath(socket)
+		listener, listenErr := net.Listen("unix", socket)
+		if listenErr == nil {
+			listener.Close()
+		}
+		if length < limit {
+			if guardErr != nil || listenErr != nil {
+				t.Fatalf("%d-byte socket path: guard %v, bind %v; want both to pass", length, guardErr, listenErr)
+			}
+			continue
+		}
+		want := fmt.Sprintf("daemon socket path %s is %d bytes, over the %d-byte unix socket path limit; set XDG_STATE_HOME to a shorter directory", socket, length, limit-1)
+		if guardErr == nil || guardErr.Error() != want || listenErr == nil {
+			t.Fatalf("%d-byte socket path: guard %v, bind %v; want guard %q and a refused bind", length, guardErr, listenErr, want)
+		}
+	}
+}
+
 func TestDrainRejectsNewAdmissionAndWaitsForActiveWork(t *testing.T) {
 	gate := &admission{}
 	started, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -374,6 +412,76 @@ func TestStopDoesNotReportSuccessWhileSingletonLockIsStillHeld(t *testing.T) {
 	defer cancel()
 	if err := Stop(ctx, runtime); err == nil {
 		t.Fatal("stop reported success before draining process released singleton lock")
+	}
+}
+
+// TestStopAlsoStopsTheSuccessorThatTookOverTheDrain: a daemon started while
+// the stopped one drains waits that drain out and takes the lock (serve's
+// takeover), as a second proxy's start does when Stop lands mid-startup. Stop
+// asks that successor to drain too and returns once no daemon is left, never
+// waiting out its whole window on a healthy successor.
+func TestStopAlsoStopsTheSuccessorThatTookOverTheDrain(t *testing.T) {
+	runtime := daemonFixture(t)
+	if err := privateRoot(runtime.Paths.Home); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := identity(runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := paths.DaemonSocket(runtime.Paths.Home)
+	stopped := StatusInfo{Service: serviceMarker, PID: os.Getpid(), Version: runtime.Version, Started: time.Now().UTC(), Endpoint: endpoint, ConfigPath: runtime.Config.Path, ConfigDigest: digest}
+	successor := stopped
+	successor.PID++
+	successor.Started = stopped.Started.Add(time.Second)
+	var mu sync.Mutex
+	healthy, drains := stopped, []int{}
+	drainPolls := 0
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path == "/stop" {
+			var expected StatusInfo
+			if err := json.NewDecoder(r.Body).Decode(&expected); err != nil || !sameInstance(expected, healthy) {
+				http.Error(w, "daemon instance changed before drain", http.StatusConflict)
+				return
+			}
+			drains = append(drains, expected.PID)
+			healthy.Draining = true
+			if expected.PID == successor.PID {
+				// The successor drains and exits: its socket goes, and no lock file was ever taken.
+				os.Remove(endpoint)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		snapshot := healthy
+		if healthy.PID == stopped.PID && healthy.Draining {
+			if drainPolls++; drainPolls == 3 {
+				// The stopped daemon has exited and the waiting successor holds the lock.
+				healthy = successor
+			}
+		}
+		json.NewEncoder(w).Encode(snapshot)
+	})}
+	listener, err := net.Listen("unix", endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener.(*net.UnixListener).SetUnlinkOnClose(false)
+	if err := os.Chmod(endpoint, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	defer func() { server.Close(); <-done; os.Remove(endpoint) }()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	stopErr := Stop(ctx, runtime)
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []int{stopped.PID, successor.PID}; stopErr != nil || fmt.Sprint(drains) != fmt.Sprint(want) {
+		t.Fatalf("Stop = %v, drains requested for PIDs %v; want nil and %v", stopErr, drains, want)
 	}
 }
 

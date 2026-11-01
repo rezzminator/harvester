@@ -109,6 +109,15 @@ func acquire(runtime config.Runtime) (*os.File, bool, error) {
 	return file, true, nil
 }
 
+// checkSocketPath refuses a socket path the kernel cannot bind (sun_path holds 104 bytes on macOS,
+// 108 on Linux, its NUL included) by name, where bind alone says only "invalid argument".
+func checkSocketPath(socket string) error {
+	if limit := len(syscall.RawSockaddrUnix{}.Path); len(socket) >= limit {
+		return fmt.Errorf("daemon socket path %s is %d bytes, over the %d-byte unix socket path limit; set XDG_STATE_HOME to a shorter directory", socket, len(socket), limit-1)
+	}
+	return nil
+}
+
 func Serve(ctx context.Context, runtime config.Runtime) error {
 	return serve(ctx, runtime, drainTimeout, nil)
 }
@@ -165,6 +174,9 @@ func serve(ctx context.Context, runtime config.Runtime, drainWindow time.Duratio
 			return fmt.Errorf("remove stale daemon socket: %w", err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := checkSocketPath(socket); err != nil {
 		return err
 	}
 	listener, err := net.Listen("unix", socket)

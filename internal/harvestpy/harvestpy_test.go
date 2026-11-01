@@ -342,7 +342,13 @@ func TestProvisionKeepsAbsoluteVenvLinksAtTheirFinalPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPython := filepath.Join(final, "python", "bin", "python3")
+	// A link resolves to the canonical path: compare it with the canonical final tree (a temp root
+	// under a linked ancestor, as macOS's /var -> /private/var, differs from its lexical name).
+	canonicalFinal, err := filepath.EvalSymlinks(final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPython := filepath.Join(canonicalFinal, "python", "bin", "python3")
 	if resolved != wantPython {
 		t.Fatalf("absolute uv Python link resolves to %s, want %s", resolved, wantPython)
 	}

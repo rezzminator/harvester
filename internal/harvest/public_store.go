@@ -325,9 +325,23 @@ func symlinkBelow(path, root string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	rel, err := filepath.Rel(root, path)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return false, errors.New("path is outside namespace")
+	below := func(root string) (string, bool) {
+		rel, err := filepath.Rel(root, path)
+		return rel, err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+	}
+	rel, inside := below(root)
+	if !inside {
+		// A path named canonically (through a linked ancestor of root, as macOS's /var ->
+		// /private/var) is matched against the canonical root, canonical with canonical; the
+		// walk below still finds a link planted inside the namespace.
+		canonicalRoot, canonicalErr := canonicalPublicPath(root)
+		if canonicalErr != nil {
+			return false, canonicalErr
+		}
+		if rel, inside = below(canonicalRoot); !inside {
+			return false, errors.New("path is outside namespace")
+		}
+		root = canonicalRoot
 	}
 	current := root
 	if rel == "." {

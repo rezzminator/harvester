@@ -69,8 +69,13 @@ func TestProvisionBrowserConvergesUnderThePlatformRoot(t *testing.T) {
 			statErr,
 		)
 	}
-	if !strings.HasPrefix(resolved, final+string(filepath.Separator)) {
-		t.Fatalf("interpreter resolved to %q, outside the digest root %q", resolved, final)
+	// resolved is canonical: so is the digest root it must sit in (macOS's /var -> /private/var).
+	canonicalFinal, err := filepath.EvalSymlinks(final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(resolved, canonicalFinal+string(filepath.Separator)) {
+		t.Fatalf("interpreter resolved to %q, outside the digest root %q", resolved, canonicalFinal)
 	}
 	current := BrowserRuntimeRoot(root, platform)
 	if _, err := os.Stat(filepath.Join(current, "project", "browser.py")); err != nil {

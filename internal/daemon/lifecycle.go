@@ -421,18 +421,23 @@ func Stop(ctx context.Context, runtime config.Runtime) error {
 	}
 	bounded, cancel := context.WithTimeout(ctx, drainTimeout+cleanupTimeout+time.Second)
 	defer cancel()
-	if err == nil {
-		if err := requestStop(bounded, runtime, status); err != nil {
-			current, probeErr := Status(bounded, runtime)
-			if !errors.Is(probeErr, ErrDaemonAbsent) && !(probeErr == nil && sameInstance(status, current) && current.Draining) {
-				return errors.Join(err, probeErr)
-			}
-		}
-	}
+	// stopping is the instance last asked to drain. A daemon started while it drains waits the
+	// drain out and takes the lock (serve's takeover), so a healthy instance that is not it is
+	// asked to drain too: Stop ends with no daemon, never waiting out its window on a successor.
+	var stopping StatusInfo
+	current := status
 	for {
-		current, err := Status(bounded, runtime)
 		if err == nil && current.CleanupError != "" {
 			return fmt.Errorf("daemon unsafe cleanup; see %s: %s", paths.DaemonLog(runtime.Paths.Home), current.CleanupError)
+		}
+		if err == nil && !current.Draining && !sameInstance(current, stopping) {
+			if stopErr := requestStop(bounded, runtime, current); stopErr != nil {
+				probe, probeErr := Status(bounded, runtime)
+				if !errors.Is(probeErr, ErrDaemonAbsent) && !(probeErr == nil && sameInstance(current, probe) && probe.Draining) {
+					return errors.Join(stopErr, probeErr)
+				}
+			}
+			stopping = current
 		}
 		if errors.Is(err, ErrDaemonAbsent) {
 			released, err := lockReleased(runtime)
@@ -453,6 +458,7 @@ func Stop(ctx context.Context, runtime config.Runtime) error {
 			return fmt.Errorf("wait for daemon drain: %w", bounded.Err())
 		case <-timer.C:
 		}
+		current, err = Status(bounded, runtime)
 	}
 }
 
