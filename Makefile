@@ -1,4 +1,4 @@
-# The checks GitHub runs on a pull request to main (.github/workflows/release.yml),
+# The checks GitHub runs on a pull request to main (.github/workflows/ci.yml),
 # runnable here first: `make release-check` runs them all.
 GO_VERSION := $(shell awk '/^go /{print $$2}' go.mod)
 # go.mod's toolchain exactly, as setup-go gives CI; build-release.sh refuses any other.
@@ -22,8 +22,9 @@ export VERSION_PAST
 
 .PHONY: release-check check leak release
 
-release-check: check leak release
+release-check: check release
 
+# The whole local gate, the leak scan last: a run with no terms still reports every other check.
 check:
 	unformatted=$$(sh -c '"$$(go env GOROOT)/bin/gofmt" -l .'); \
 	test -z "$$unformatted" || { printf '%s\n' "$$unformatted"; exit 1; }
@@ -32,6 +33,7 @@ check:
 	umask 022 && CGO_ENABLED=1 go test -race ./internal/harvest ./internal/harvestmcp
 	$(NODE) node --test plugins/harvester/opencode.test.mjs
 	scripts/release-check.sh
+	$(MAKE) --no-print-directory leak
 
 # LEAK_TERMS names the terms file (CI writes the secret to one); unset, scripts/leak-terms.txt.
 leak: SHELL := bash
@@ -45,3 +47,6 @@ release:
 	base=$$(git show origin/main:VERSION 2>/dev/null); \
 	python3 -c "$$VERSION_PAST" "$${base:-0.0.0}" "$$(cat VERSION)"
 	scripts/release-check.sh --release
+	v=$$(cat VERSION); \
+	awk -v heading="## [$$v]" 'index($$0, heading) == 1 { found = 1; next } found && /^## \[/ { exit } found' CHANGELOG.md | grep -q '' \
+	  || { echo "release: CHANGELOG.md section for $$v yields no release notes" >&2; exit 1; }
