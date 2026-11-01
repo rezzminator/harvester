@@ -1,7 +1,6 @@
 package ask
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,10 +8,11 @@ import (
 	"github.com/rezzminator/harvester/internal/engine"
 	"github.com/rezzminator/harvester/internal/obs"
 	"github.com/rezzminator/harvester/internal/testjail"
-	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -86,6 +86,10 @@ func TestProcessReportsMissingCrashTimeoutAndEmpty(t *testing.T) {
 		{"crash", "cat >/dev/null\nprintf 'fixture failure' >&2\nexit 7\n", "fixture failure", time.Second},
 		{"empty", "cat >/dev/null\nprintf '%s' '{\"result\":\"\"}'\n", "no answer", time.Second},
 		{"timeout", "cat >/dev/null\nsleep 30 &\nwait\n", "timed out", 25 * time.Millisecond},
+		{
+			"stdout overflow", fmt.Sprintf("cat >/dev/null\nhead -c %d /dev/zero\n", maxCapturedOutput+1),
+			"claude ask failed: normalized headless output exceeded the 8388608-byte capture limit", 30 * time.Second,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			binary := filepath.Join(t.TempDir(), "fixture")
@@ -136,17 +140,40 @@ func TestProcessKeepsTheAnswerWhenStderrOverflows(t *testing.T) {
 	}
 }
 
-func TestBoundedBufferRejectsOversizedEngineOutput(t *testing.T) {
-	var buffer boundedBuffer
-	body := []byte(strings.Repeat("x", maxCapturedOutput+1))
-	n, err := buffer.Write(body)
-	if err != nil || n != len(body) || buffer.Len() != maxCapturedOutput || !buffer.truncated {
-		t.Fatalf("n=%d len=%d truncated=%v err=%v", n, buffer.Len(), buffer.truncated, err)
+// TestProcessKeepsTheAnswerWhenADescendantHoldsItsOutput: an engine that
+// answered and exited is answered, whatever still holds its output streams:
+// a descendant it left behind, or a loaded scheduler that has not yet copied
+// them.
+func TestProcessKeepsTheAnswerWhenADescendantHoldsItsOutput(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "fixture")
+	pidFile := filepath.Join(root, "descendant.pid")
+	body := "#!/bin/sh\ncat >/dev/null\nsleep 30 &\necho $! >\"$ASK_DESCENDANT_PID\"\nprintf '%s' '{\"result\":\"answer\"}'\n"
+	if err := testjail.WriteExecutable(binary, []byte(body), 0700); err != nil {
+		t.Fatal(err)
 	}
-	// io.Copy is how exec fills the buffer from a pipe: it must meet the same cap.
-	var copied boundedBuffer
-	written, err := io.Copy(&copied, bytes.NewReader(body))
-	if err != nil || written != int64(len(body)) || copied.Len() != maxCapturedOutput || !copied.truncated {
-		t.Fatalf("io.Copy: written=%d len=%d truncated=%v err=%v", written, copied.Len(), copied.truncated, err)
+	t.Setenv("ASK_DESCENDANT_PID", pidFile)
+	t.Cleanup(func() {
+		raw, err := os.ReadFile(pidFile)
+		if err != nil {
+			t.Errorf("read the descendant's pid at %s: %v", pidFile, err)
+			return
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if err != nil {
+			t.Errorf("descendant pid %q in %s: %v", raw, pidFile, err)
+			return
+		}
+		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			t.Errorf("kill the descendant %d: %v", pid, err)
+		}
+	})
+	runner, err := ResolveClaude(config.Config{Claude: config.Claude{Binary: binary}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run(context.Background(), AskInput{ContentFiles: []string{"source.md"}, SourceLabels: []string{"source"}, Prompt: "Question"})
+	if err != nil || result.Answer != "answer" {
+		t.Fatalf("result=%+v err=%v; want the answer the engine wrote before it exited", result, err)
 	}
 }

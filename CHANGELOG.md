@@ -15,6 +15,7 @@ Every release of harvester. Versions follow [semantic versioning](https://semver
 - On macOS, a cache or temp directory reached through a link (`/var` to `/private/var`) works, the browser worker installs into the resolved environment path, and a daemon socket path too long for the system fails with a clear error instead of `invalid argument`.
 - `harvester stop` also drains the second daemon that takes over when two sessions start at once, instead of waiting for it until the timeout.
 - `ask` skips a Codex output item it cannot decode, with a warning, and keeps the earlier message as the answer.
+- An `ask` on a busy machine, or over an engine that leaves a child process running after it answers, returns the answer instead of failing with `WaitDelay expired before I/O complete`.
 - On macOS, the leak check (`make leak`) runs under the system bash.
 
 ## [0.2.1] — 2026-11-01
