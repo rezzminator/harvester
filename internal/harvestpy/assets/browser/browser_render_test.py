@@ -664,15 +664,21 @@ def test_headless_render_overrides_the_ua_and_its_client_hints_together():
         assert metadata[key] == HEADLESS_UA_DATA[key], (key, metadata)
 
 
-def test_headless_render_refuses_unreadable_engine_metadata():
-    for ua_data in (UNREADABLE, {"mobile": False, "platform": "Linux"}):
+def test_headless_render_keeps_the_engine_ua_when_its_metadata_is_unreadable():
+    for ua_data, shown in ((UNREADABLE, "None"), ({"mobile": False, "platform": "Linux"},
+                                                  "{'mobile': False, 'platform': 'Linux'}")):
         page = FeedPage(batches=0, ua_data=ua_data)
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
             fake, (html, status, error) = fetch_with(page)
-        assert html == "" and status is None and error and "userAgentData" in error, (error, html[:60])
-        assert not any(web_navigations(c) for c in fake.contexts), page.goto_calls
-        assert fake.contexts[0].closed, "the metadata context was left open"
+        assert error is None and "<body>" in html, (error, html[:60])
+        probe, render = fake.contexts[0], fake.contexts[-1]
+        assert probe.closed, "the metadata context was left open"
+        assert render.options == CONTEXT_OPTIONS and render.cdp_sends == [], (render.options, render.cdp_sends)
+        assert web_navigations(render) == ["https://forum.example.test/t/lazy-thread"], render.goto_urls
+        warning = (f"browser rung: the engine's navigator.userAgentData is unreadable (no brand list): {shown}; "
+                   "rendering with the engine's own User-Agent, which names HeadlessChrome and may meet an anti-bot wall")
+        assert warning in stderr.getvalue().splitlines(), stderr.getvalue()
 
 
 class RedirectingPage(FeedPage):

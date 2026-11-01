@@ -296,6 +296,16 @@ time.monotonic = monotonic
 assert 'using the native text layer' in result['markdown'], ('alignment budget did not fall back', result['markdown'][:300])
 assert elapsed < 3, ('aligning a table page was not bounded', elapsed)
 print('PDF table alignment: cpu=%.3fs wall=%.3fs (includes 4s descheduled)' % (cpu_elapsed, wall_elapsed))
+# One page whose Markdown extraction fails keeps its native text and names the failure; the document stands.
+page.text = 'Native words of the page'
+def extraction_fails(*a, **kw): raise RuntimeError('layout engine crashed')
+c._pymupdf4llm_markdown = extraction_fails
+result = c.convert({'path': 'fixture.pdf', 'kind': 'pdf'})
+assert result == {'ok': True, 'markdown': (
+    '_Converter gap: PDF page 1: Markdown extraction failed (RuntimeError: layout engine crashed)_\n\n'
+    '_Converter gap: PDF page 1: conversion omitted 5 text-layer tokens_\n\n'
+    '_Converter gap: PDF page 1: using the native text layer instead, Markdown layout was lost_\n\n'
+    'Native words of the page\n')}, result
 page.text = 'Readable native text'
 def broken(*a, **kw): raise RuntimeError('text layer unreadable')
 page.get_text = broken

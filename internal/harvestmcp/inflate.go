@@ -19,16 +19,12 @@ func (converter pythonConverter) Inflate(
 	codec string,
 	body []byte,
 	limit int64,
-) (inner []byte, returnErr error) {
+) ([]byte, error) {
 	directory, err := os.MkdirTemp("", "harvester-inflate-")
 	if err != nil {
 		return nil, fmt.Errorf("create inflate scratch: %w", err)
 	}
-	defer func() {
-		if cleanupErr := os.RemoveAll(directory); cleanupErr != nil {
-			returnErr = errors.Join(returnErr, fmt.Errorf("remove inflate scratch: %w", cleanupErr))
-		}
-	}()
+	defer removeScratch(ctx, "inflate", directory)
 	input, output := filepath.Join(directory, "input."+codec), filepath.Join(directory, "inner")
 	if err := os.WriteFile(input, body, 0o600); err != nil {
 		return nil, fmt.Errorf("write inflate scratch: %w", err)

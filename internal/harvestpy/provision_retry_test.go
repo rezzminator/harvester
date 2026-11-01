@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -68,6 +70,50 @@ func TestDownloadFileRetriesServerFailure(t *testing.T) {
 	}
 	if retries != 1 || second != 2 || strings.Contains(recorder.Raw(), "hidden") {
 		t.Fatalf("records: %s", recorder.Raw())
+	}
+}
+
+// roundTripFunc answers a request without a network.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (answer roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return answer(request)
+}
+
+// closeFailingBody is a complete response body whose Close errors.
+type closeFailingBody struct{ io.Reader }
+
+func (closeFailingBody) Close() error { return errors.New("connection reset by peer") }
+
+// TestDownloadFileKeepsACompleteBodyWhoseCloseFails: every pinned byte arrived
+// and the size matched, so a close error is logged, never the download's.
+func TestDownloadFileKeepsACompleteBodyWhoseCloseFails(t *testing.T) {
+	restore := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK", ContentLength: 8, Request: request,
+			Body: closeFailingBody{strings.NewReader("artifact")},
+		}, nil
+	})
+	t.Cleanup(func() { http.DefaultTransport = restore })
+	ctx, recorder := obs.Test(t)
+	path := filepath.Join(t.TempDir(), "artifact")
+	if err := downloadFile(ctx, clock.Real, "https://archive.invalid/archive", path, 8); err != nil {
+		t.Fatalf("download with a failing body close: %v", err)
+	}
+	if body, err := os.ReadFile(path); err != nil || string(body) != "artifact" {
+		t.Fatalf("%s = %q, %v; want artifact", path, body, err)
+	}
+	var closes []string
+	for _, record := range recorder.Records() {
+		if record.Message == "harvestpy.download.close" {
+			at, _ := record.Field("path")
+			cause, _ := record.Field(obs.FieldErr)
+			closes = append(closes, fmt.Sprintf("%s %v: %v", record.Level, at, cause))
+		}
+	}
+	if want := []string{"WARN /archive: connection reset by peer"}; !slices.Equal(closes, want) {
+		t.Fatalf("close records = %q, want %q", closes, want)
 	}
 }
 

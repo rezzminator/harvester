@@ -164,7 +164,9 @@ func (h *Harvester) exportResult(source, field string, result Result, sizeOnly b
 			out.Path = publicPath
 		}
 	} else {
-		if result.Kind != kindArchiveMember && result.Kind != kindArchive {
+		// A pathless result carries its whole document inline: an archive's
+		// listing or member, or a page whose cache save failed (storeResult).
+		if result.Kind != kindArchiveMember && result.Kind != kindArchive && result.Content == "" {
 			return h.publicExportFailure(
 				source,
 				result,

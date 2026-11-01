@@ -410,6 +410,7 @@ func (r *Resolver) findSemanticScholar(ctx context.Context, client *http.Client,
 	var data struct {
 		Data []struct {
 			Title   string `json:"title"`
+			URL     string `json:"url"`
 			Year    int    `json:"year"`
 			Authors []struct {
 				Name string `json:"name"`
@@ -424,7 +425,7 @@ func (r *Resolver) findSemanticScholar(ctx context.Context, client *http.Client,
 		} `json:"data"`
 	}
 	endpoint := "https://api.semanticscholar.org/graph/v1/paper/search?query=" + url.QueryEscape(query) +
-		fmt.Sprintf("&limit=%d", limit) + "&fields=title,year,authors,externalIds,openAccessPdf"
+		fmt.Sprintf("&limit=%d", limit) + "&fields=title,url,year,authors,externalIds,openAccessPdf"
 	if err := getJSON(ctx, client, endpoint, &data); err != nil {
 		log.Printf("harvest: search_literature semantic-scholar search failed for %q: %v", query, err)
 		return nil
@@ -447,8 +448,10 @@ func (r *Resolver) findSemanticScholar(ctx context.Context, client *http.Client,
 			handle = "https://arxiv.org/pdf/" + paper.ExternalIDs.ArXiv
 		case paper.OpenAccessPDF.URL != "":
 			handle = paper.OpenAccessPDF.URL
+		case paper.URL != "":
+			handle = paper.URL // no fetchable id: the paper's Semantic Scholar page still names it
 		default:
-			continue // no fetchable handle → useless as a candidate
+			continue // no handle at all
 		}
 		if paper.OpenAccessPDF.URL != "" || paper.ExternalIDs.ArXiv != "" {
 			free = accessGreen

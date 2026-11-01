@@ -37,11 +37,13 @@ func TestNotionRichTextKeepsItsMarks(t *testing.T) {
 	}
 	for _, check := range []struct{ name, got, want string }{
 		{
-			"callout", renderer.rich(callout.Properties["title"], false),
+			"callout", renderer.rich(callout, "title", false),
 			"b223 callout[b223 callout part 2](https://example.com/link-29)b223 callout part 3*b223 callout part 4*",
 		},
-		{"toggle summary", renderer.rich(toggle.Properties["title"], true), "b008 toggle"},
-		{"bold text", renderer.rich(toggle.Properties["title"], false), "**b008 toggle**"},
+		{"toggle summary", renderer.rich(toggle, "title", true), "b008 toggle"},
+		{"bold text", renderer.rich(toggle, "title", false), "**b008 toggle**"},
+		// a segment whose text is not a string keeps its raw value
+		{"non-string segment", renderer.rich(&notionBlock{Properties: map[string]json.RawMessage{"title": json.RawMessage(`[["kept "],[7],["end"]]`)}}, "title", false), "kept 7end"},
 	} {
 		if check.got != check.want {
 			t.Errorf("%s: got %q, want %q", check.name, check.got, check.want)

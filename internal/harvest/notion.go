@@ -125,6 +125,9 @@ type notionPage struct {
 	asked   map[string]bool
 	records int
 	dropped bool
+	// undecoded counts the kept answers that no longer decode: each is left
+	// out, the ones after it kept.
+	undecoded int
 }
 
 // notionPageOf reads the page a Notion address names and the answers kept for
@@ -147,7 +150,7 @@ func notionPageOf(doc *html.Node, page *url.URL) (notionPage, bool) {
 		if err := state.keep(nodeAttr(node, "kind"), []byte(rawText(node))); err != nil {
 			obs.Logger(context.Background()).Warn("harvest: a kept Notion answer no longer decodes; left out",
 				"page", nodeAttr(node, "page"), obs.FieldErr, err.Error())
-			break
+			state.undecoded++
 		}
 		state.answers++
 	}
@@ -412,7 +415,7 @@ func extractNotionPage(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 			unread++
 		}
 	}
-	title := renderer.plain(root.Properties["title"])
+	title := renderer.plain(root, "title")
 	if title == "" {
 		title = "Untitled"
 	}
@@ -436,6 +439,14 @@ func extractNotionPage(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 	}
 	if unread > 0 {
 		partial = joinReasons(partial, notionBlocks(unread)+" not read: the block records request did not complete")
+	}
+	if state.undecoded > 0 {
+		partial = joinReasons(partial, fmt.Sprintf("%d kept answer(s) of the site's API no longer decoded and were left out",
+			state.undecoded))
+	}
+	if len(renderer.unreadable) > 0 {
+		partial = joinReasons(partial, fmt.Sprintf("%d rich-text propert(ies) did not decode and were left out (%s)",
+			len(renderer.unreadable), strings.Join(renderer.unreadable, "; ")))
 	}
 	if state.chunks >= notionChunkPages && state.chunkMore() {
 		partial = joinReasons(partial, fmt.Sprintf("the page's chunks continue past the %d the harvester reads",

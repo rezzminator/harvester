@@ -1,6 +1,7 @@
 package harvest
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -71,5 +72,32 @@ func TestStoredContentKeepsGapsWhenTheArtifactDoesNotRead(t *testing.T) {
 	}
 	if got := partialBody(content); got != "\nThe body.\n" {
 		t.Fatalf("re-stored body %q, want the inline content", got)
+	}
+}
+
+// TestStoreResultKeepsTheContentWhenTheCacheCannotSave: a document fetched and
+// converted whole is returned whole when only its cache save fails, the
+// failure named in its gaps, and the public read carries it.
+func TestStoreResultKeepsTheContentWhenTheCacheCannotSave(t *testing.T) {
+	setHarvestTestJail(t)
+	root := t.TempDir()
+	h := mustNew(t, Options{CacheDir: root, MaxInlineChars: 4})
+	const source = "https://example.test/notes"
+	// A file where the html cache directory goes: the save cannot create it.
+	if err := os.WriteFile(filepath.Join(root, "html"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const body = "# Gauge notes\n\nThe body.\n"
+	const wantPartial = "login wall; not saved to the cache (a later read fetches it again)"
+	stored := h.storeResult(source, kindHTML, "direct", withPartial(body, "login wall"), 10, 200,
+		[]string{"direct"}, FetchOptions{})
+	if stored.Error != "" || stored.Path != "" || stored.Content != body || stored.Partial != wantPartial {
+		t.Fatalf("stored = error %q path %q content %q partial %q, want no error, no path, content %q, partial %q",
+			stored.Error, stored.Path, stored.Content, stored.Partial, body, wantPartial)
+	}
+	public := h.PublicResult(source, stored, false)
+	if public.Error != "" || public.Partial != wantPartial || public.Chars != contentChars(body) {
+		t.Fatalf("public = error %q partial %q chars %d, want no error, partial %q, chars %d",
+			public.Error, public.Partial, public.Chars, wantPartial, contentChars(body))
 	}
 }

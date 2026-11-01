@@ -2,6 +2,7 @@ package harvest
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -55,13 +56,14 @@ func TestWaveStripDefuddleEnvelope(t *testing.T) {
 	}
 }
 
-// ocrTestConverter is a plain Converter that returns empty text for PDFs (a
-// "scan") plus an OCR-capable escalation path, mirroring pythonConverter.
+// ocrTestConverter is a plain Converter that answers a PDF (a "scan") with
+// the EMPTY-text error, as pythonConverter does, plus an OCR-capable
+// escalation path, mirroring pythonConverter.
 type ocrTestConverter struct{}
 
 func (ocrTestConverter) Convert(_ context.Context, kind, _ string, _ []byte) (string, error) {
-	if kind == "pdf" {
-		return "", nil // scanned page: empty text layer
+	if kind == "pdf" { // scanned page: empty text layer
+		return "", errors.New("harvestpy worker returned empty markdown (EMPTY-text conversion)")
 	}
 	return "web body", nil
 }

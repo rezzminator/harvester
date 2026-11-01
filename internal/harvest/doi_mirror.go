@@ -546,12 +546,13 @@ func doiMirrorChallenge(body []byte, status int) bool {
 		return true
 	}
 	low := strings.ToLower(string(body))
-	for _, marker := range []string{"altcha-widget", "altcha", "ddos-guard", "ddos guard", challengeMarkerCaptcha, challengeMarkerCloudflare} {
+	for _, marker := range []string{"altcha-widget", "ddos-guard", "ddos guard"} {
 		if strings.Contains(low, marker) {
 			return true
 		}
 	}
-	return false
+	// isChallenge already judged "captcha" and "cloudflare"; a bare "altcha" takes the same corroboration
+	return strings.Contains(low, "altcha") && bareWallWordCorroborated(low, shortWallBody(body), status)
 }
 
 func doiMirrorPDFLink(body []byte, finalURL string) (string, error) {

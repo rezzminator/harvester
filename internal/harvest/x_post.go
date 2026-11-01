@@ -215,6 +215,8 @@ type xPage struct {
 	id      string
 	answer  *xThreadAnswer
 	dropped map[string]bool
+	// undecoded counts the kept answers that no longer decode.
+	undecoded int
 }
 
 func xPageOf(doc *html.Node, page *url.URL) (xPage, bool) {
@@ -232,6 +234,7 @@ func xPageOf(doc *html.Node, page *url.URL) (xPage, bool) {
 		if err := json.Unmarshal([]byte(rawText(node)), &answer); err != nil {
 			obs.Logger(context.Background()).Warn("harvest: a kept X answer no longer decodes; left out",
 				"kind", nodeAttr(node, "kind"), obs.FieldErr, err.Error())
+			state.undecoded++
 			continue
 		}
 		state.answer = &answer
@@ -294,12 +297,20 @@ func extractXPost(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 	if !ok {
 		return siteExtraction{}, false
 	}
+	gap := keptAnswerGap("X", state.undecoded)
 	if state.answer == nil || state.answer.Status == nil {
-		return siteExtraction{unrendered: "x post: the post was not loaded from the FxTwitter API " +
-			"(the page is stored as X serves it signed out)"}, false
+		unrendered := "x post: the post was not loaded from the FxTwitter API " +
+			"(the page is stored as X serves it signed out)"
+		if gap != "" {
+			unrendered += "; " + gap
+		}
+		return siteExtraction{unrendered: unrendered}, false
 	}
 	post := state.answer.Status
 	var gaps []string
+	if gap != "" {
+		gaps = append(gaps, gap)
+	}
 	var out strings.Builder
 	author := xHandle(post.Author)
 	title := author + " on X"

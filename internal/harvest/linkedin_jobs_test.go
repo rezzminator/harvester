@@ -26,3 +26,19 @@ func TestLinkedInJobSalaryRange(t *testing.T) {
 		}
 	}
 }
+
+// TestLinkedInJobEducationOfAnotherShapeIsKept: one educationRequirements
+// value that is neither text nor an object with a credentialCategory is kept
+// as stated beside the readable ones; the posting still renders.
+func TestLinkedInJobEducationOfAnotherShapeIsKept(t *testing.T) {
+	t.Parallel()
+	job := `{"@type":"JobPosting","title":"Robot Technician","hiringOrganization":{"name":"Contoso"},` +
+		`"educationRequirements":[{"credentialCategory":"bachelor degree"},7]}`
+	extraction, _, ok := extractForSite("https://www.linkedin.com/jobs/view/4000000001/", linkedInInline(t, "", job))
+	if !ok {
+		t.Fatal("the job was not rendered")
+	}
+	if want := "- **Education:** bachelor degree, 7"; !strings.Contains(extraction.markdown, want) {
+		t.Errorf("the rendering lacks %q:\n%s", want, extraction.markdown)
+	}
+}

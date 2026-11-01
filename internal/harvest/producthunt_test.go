@@ -222,3 +222,43 @@ func TestProductHuntPageWithoutStateFallsThrough(t *testing.T) {
 		t.Fatalf("a page with no embedded state was claimed: requests %v\n%.1500s", site.requests, result.Content)
 	}
 }
+
+// TestProductHuntStatesNoCountAndServesReviewsWithoutAnID: a product embedded
+// with no reviewsCount is still claimed, the list's total the stated count
+// and the page's own count left unnamed; a review the list serves with no id
+// is kept. With no count anywhere and the list refused, the embedded reviews
+// render under an unstated count, a review embedded with no id among them.
+func TestProductHuntStatesNoCountAndServesReviewsWithoutAnID(t *testing.T) {
+	t.Parallel()
+	site := newProductHuntSite(t)
+	site.page = strings.Replace(site.page, `detailedReviewsCount":4`, `detailedReviewsCounts":4`, 1)
+	site.answers[2] = strings.Replace(site.answers[2], `"id":"700001",`, "", 1)
+	result := site.harvester(t).FetchWithOptions(context.Background(), productHuntURL, FetchOptions{Refresh: true})
+	if result.Error != "" || result.Partial != "" {
+		t.Fatalf("the reviews are not complete: partial=%q error=%q\n%.2500s", result.Partial, result.Error,
+			result.Content)
+	}
+	if got := strings.Join(socialRendered(result.Content), ","); got != "700005,700004,700003,700002,no-id" {
+		t.Fatalf("reviews are wrong: got %v\n%.2500s", got, result.Content)
+	}
+	if !strings.Contains(result.Content, "**Replies:** 5 stated · 5 loaded\n\n") ||
+		strings.Contains(result.Content, "The page states") {
+		t.Fatalf("the count line is wrong:\n%.1500s", result.Content)
+	}
+
+	site = newProductHuntSite(t)
+	site.page = strings.Replace(site.page, `detailedReviewsCount":4`, `detailedReviewsCounts":4`, 1)
+	site.page = strings.Replace(site.page, `"totalCount":5}}}}`, `"totalCounts":5}}}}`, 1)
+	site.page = strings.Replace(site.page, `"id":"700005",`, "", 1)
+	site.status[1] = http.StatusForbidden
+	result = site.harvester(t).FetchWithOptions(context.Background(), productHuntURL, FetchOptions{Refresh: true})
+	if got := strings.Join(socialRendered(result.Content), ","); got != "no-id,700004" {
+		t.Fatalf("embedded reviews are wrong: got %v (partial %q error %q)\n%.2500s", got, result.Partial,
+			result.Error, result.Content)
+	}
+	const unread = "the site's review list was not read (only the page's embedded reviews are shown)"
+	if !strings.Contains(result.Content, "**Replies:** unstated · 2 loaded · gaps: "+unread+"\n\n") ||
+		!strings.HasPrefix(result.Partial, "product hunt reviews: 2 replies loaded, none stated — "+unread) {
+		t.Fatalf("the unstated count is not named: partial %q\n%.1500s", result.Partial, result.Content)
+	}
+}

@@ -142,22 +142,24 @@ var claudeModelAliases = []string{"fable", "opus", "sonnet", "haiku"}
 
 const claudeLongContext = "[1m]"
 
-// CheckModel validates the engine family before any source is read. The engine
-// remains the final judge of whether an accepted model id exists.
+// CheckModel refuses a model id of the other engine's family before any source
+// is read (a Claude alias or claude- id for Codex, a gpt- id for Claude); any
+// other id goes to the engine, the final judge of whether it exists.
 func CheckModel(id engine.ID, model string) (string, error) {
 	descriptor, err := engine.Lookup(id)
 	if err != nil {
 		return "", err
 	}
 	model = strings.TrimSpace(model)
-	if alias := strings.ToLower(model); id == engine.Claude && slices.Contains(claudeModelAliases, strings.TrimSuffix(alias, claudeLongContext)) {
+	alias := strings.ToLower(model)
+	claude := slices.Contains(claudeModelAliases, strings.TrimSuffix(alias, claudeLongContext)) || strings.HasPrefix(model, "claude-")
+	switch {
+	case id == engine.Claude && claude && !strings.HasPrefix(model, "claude-"):
 		return alias, nil
-	}
-	if id == engine.Claude && strings.HasPrefix(model, "claude-") || id == engine.Codex && strings.HasPrefix(model, "gpt-") {
-		return model, nil
-	}
-	if id == engine.Claude {
+	case id == engine.Claude && strings.HasPrefix(model, "gpt-"):
 		return "", fmt.Errorf("model %q is not a claude model: name an alias (%s) or a model id starting claude-", model, strings.Join(claudeModelAliases, ", "))
+	case id != engine.Claude && claude:
+		return "", fmt.Errorf("model %q is not a %s model: name a model id starting gpt-", model, descriptor.LongName)
 	}
-	return "", fmt.Errorf("model %q is not a %s model: name a model id starting gpt-", model, descriptor.LongName)
+	return model, nil
 }

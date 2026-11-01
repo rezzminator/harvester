@@ -52,6 +52,13 @@ const browserRebuildSuffix = ".rebuild-"
 // concurrent fetch never reads a half-deleted tree. A leftover nothing points
 // at is unreachable and is cleared in place.
 func browserBuildTarget(envRoot, current, desired string, now clock.Clock) (build, replaced string, err error) {
+	// live below is canonical, so every path compared with it is too: under a linked root (macOS's
+	// /var -> /private/var) a lexical attempt never equals live, and the live tree was cleared.
+	canonicalRoot, err := filepath.EvalSymlinks(envRoot)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve browser environment root %s: %w", envRoot, err)
+	}
+	envRoot = canonicalRoot
 	want := filepath.Join(envRoot, desired)
 	live := ""
 	if resolved, resolveErr := filepath.EvalSymlinks(current); resolveErr == nil {
@@ -134,15 +141,11 @@ func provisionBrowserWithTargets(
 	// Single-flight from here on: reuse check, downloads, build and swap all
 	// touch this root, and a second harvester converging it at the same time is how
 	// one of them reads a tree the other is halfway through replacing.
-	release, err := lockProvisionRoot(ctx, envRoot)
+	release, err := provisionLock(ctx, envRoot)
 	if err != nil {
 		return ProvisionResult{}, err
 	}
-	defer func() {
-		if releaseErr := release(); releaseErr != nil {
-			returnErr = errors.Join(returnErr, releaseErr)
-		}
-	}()
+	defer releaseProvisionRoot(ctx, release)
 	if existing, err := ReadEnvironmentDigest(
 		filepath.Join(current, "environment.json"),
 	); err == nil && existing.Digest == desired &&
@@ -290,9 +293,12 @@ func provisionBrowserWithTargets(
 	}
 	published = true
 	if replaced != "" {
-		// Unreachable now that the pointer moved.
-		if err := os.RemoveAll(replaced); err != nil {
-			return ProvisionResult{}, fmt.Errorf("remove replaced browser environment %s: %w", replaced, err)
+		// Unreachable now that the pointer moved. A tree left behind never
+		// fails the live one: the next rebuild of this digest clears it
+		// (browserBuildTarget); a build of another digest leaves it.
+		if err := pruneRemoveAll(replaced); err != nil {
+			obs.Logger(obs.Component(ctx, "harvestpy")).Warn("harvestpy.browser.leftover",
+				"path", replaced, obs.FieldErr, err.Error())
 		}
 	}
 	return ProvisionResult{Digest: desired, Environment: base, Runtime: Runtime{

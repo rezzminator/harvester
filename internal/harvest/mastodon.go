@@ -111,6 +111,8 @@ type mastodonPage struct {
 	pages   map[string]apRepliesPage
 	kept    map[string]bool
 	dropped map[string]bool
+	// undecoded counts the kept answers that no longer decode.
+	undecoded int
 }
 
 func mastodonPageOf(doc *html.Node, page *url.URL) (mastodonPage, bool) {
@@ -162,6 +164,7 @@ func mastodonPageOf(doc *html.Node, page *url.URL) (mastodonPage, bool) {
 		if err != nil {
 			obs.Logger(context.Background()).Warn("harvest: a kept Mastodon answer no longer decodes; left out",
 				"kind", nodeAttr(node, "kind"), obs.FieldErr, err.Error())
+			state.undecoded++
 		}
 	}
 	return state, true
@@ -215,29 +218,30 @@ func checkStatus(id string, body []byte, contentType string) error {
 	if status.ID != id {
 		return fmt.Errorf("answered by the record of status %s, not %s", status.ID, id)
 	}
-	if status.RepliesCount == nil {
-		return fmt.Errorf("answered by a record of status %s stating no reply count", status.ID)
-	}
 	return nil
 }
 
-// checkContext proves an API answer is the context of status id: every
-// descendant answers id or another descendant.
+// checkContext proves an API answer is the context of status id: a context
+// with replies holds one that answers id itself, and none is id. A reply whose
+// own parent the API leaves out (filtered, blocked, deleted) is no proof
+// against the answer; extractMastodonStatus shows it under the status.
 func checkContext(id string, body []byte, contentType string) error {
 	var answer mastodonContext
 	if err := json.Unmarshal(body, &answer); err != nil || !bytesHasKey(body, "descendants") {
 		return fmt.Errorf("answered by a %s body that is not the API's JSON for status %s",
 			discourseContentType(contentType), id)
 	}
-	known := map[string]bool{id: true}
-	for index := range answer.Descendants {
-		known[answer.Descendants[index].ID] = true
-	}
+	direct := false
 	for index := range answer.Descendants {
 		reply := &answer.Descendants[index]
-		if reply.ID == "" || reply.InReplyToID == nil || !known[*reply.InReplyToID] {
+		if reply.ID == "" || reply.ID == id {
 			return fmt.Errorf("answered by a context holding a status (%s) outside this thread", reply.ID)
 		}
+		direct = direct || (reply.InReplyToID != nil && *reply.InReplyToID == id)
+	}
+	if len(answer.Descendants) > 0 && !direct {
+		return fmt.Errorf("answered by a context none of whose %d statuses answers status %s",
+			len(answer.Descendants), id)
 	}
 	return nil
 }
@@ -293,13 +297,19 @@ func extractMastodonStatus(doc *html.Node, page *url.URL) (siteExtraction, bool)
 	if !ok {
 		return siteExtraction{}, false
 	}
+	gap := keptAnswerGap("Mastodon", state.undecoded)
 	if state.status == nil {
-		return siteExtraction{unrendered: "mastodon status: the status's API record was not loaded " +
-			"(its replies not read from the API; the page is stored as the instance served it)"}, false
+		unrendered := "mastodon status: the status's API record was not loaded " +
+			"(its replies not read from the API; the page is stored as the instance served it)"
+		if gap != "" {
+			unrendered += "; " + gap
+		}
+		return siteExtraction{unrendered: unrendered}, false
 	}
 	thread := socialThread{
-		kind: "mastodon status",
-		post: mastodonPost(state.status),
+		kind:          "mastodon status",
+		post:          mastodonPost(state.status),
+		statedUnknown: state.status.RepliesCount == nil,
 		notServed: "neither the instance's public context answers nor its replies collections held them " +
 			"(it serves an unauthenticated reader a bounded number of descendants per context, no reply that " +
 			"is not public, and a remote reply's own replies only as far as it knows them)",
@@ -309,6 +319,9 @@ func extractMastodonStatus(doc *html.Node, page *url.URL) (siteExtraction, bool)
 		name = state.status.Account.DisplayName + " (" + thread.post.author + ")"
 	}
 	thread.title = name + " on " + page.Hostname()
+	if gap != "" {
+		thread.gaps = append(thread.gaps, gap)
+	}
 	if own := state.contexts[state.id]; own == nil {
 		thread.gaps = append(thread.gaps, "the status's context API answer was not loaded")
 	} else {
@@ -317,8 +330,25 @@ func extractMastodonStatus(doc *html.Node, page *url.URL) (siteExtraction, bool)
 			thread.ancestors = append(thread.ancestors, mastodonPost(&own.Ancestors[index]))
 		}
 		tree := state.tree()
+		orphans := 0
 		for _, reply := range tree.replies {
-			thread.replies = append(thread.replies, mastodonPost(reply))
+			post := mastodonPost(reply)
+			if reply.InReplyToID == nil {
+				post.parent = thread.post.id
+			} else if tree.byID[post.parent] == nil {
+				post.parent = thread.post.id
+				orphans++
+			}
+			thread.replies = append(thread.replies, post)
+		}
+		if orphans > 0 {
+			thread.gaps = append(thread.gaps, fmt.Sprintf(
+				"%d repl(ies) answer a status the API did not serve (filtered, blocked or deleted): "+
+					"shown under the post", orphans))
+		}
+		if tree.unparented > 0 {
+			thread.gaps = append(thread.gaps, fmt.Sprintf(
+				"%d repl(ies) for which the API named no parent: shown under the status", tree.unparented))
 		}
 		thread.replies = append(thread.replies, state.remoteReplies(tree)...)
 	}

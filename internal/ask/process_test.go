@@ -3,12 +3,16 @@ package ask
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/rezzminator/harvester/internal/config"
 	"github.com/rezzminator/harvester/internal/engine"
+	"github.com/rezzminator/harvester/internal/obs"
 	"github.com/rezzminator/harvester/internal/testjail"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -82,6 +86,10 @@ func TestProcessReportsMissingCrashTimeoutAndEmpty(t *testing.T) {
 		{"crash", "cat >/dev/null\nprintf 'fixture failure' >&2\nexit 7\n", "fixture failure", time.Second},
 		{"empty", "cat >/dev/null\nprintf '%s' '{\"result\":\"\"}'\n", "no answer", time.Second},
 		{"timeout", "cat >/dev/null\nsleep 30 &\nwait\n", "timed out", 25 * time.Millisecond},
+		{
+			"stdout overflow", fmt.Sprintf("cat >/dev/null\nhead -c %d /dev/zero\n", maxCapturedOutput+1),
+			"claude ask failed: normalized headless output exceeded the 8388608-byte capture limit", 30 * time.Second,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			binary := filepath.Join(t.TempDir(), "fixture")
@@ -102,11 +110,70 @@ func TestProcessReportsMissingCrashTimeoutAndEmpty(t *testing.T) {
 		})
 	}
 }
-func TestBoundedBufferRejectsOversizedEngineOutput(t *testing.T) {
-	var buffer boundedBuffer
-	body := []byte(strings.Repeat("x", maxCapturedOutput+1))
-	n, err := buffer.Write(body)
-	if err != nil || n != len(body) || buffer.Len() != maxCapturedOutput || !buffer.truncated {
-		t.Fatalf("n=%d len=%d truncated=%v err=%v", n, buffer.Len(), buffer.truncated, err)
+
+// TestProcessKeepsTheAnswerWhenStderrOverflows: stderr is diagnostics; its
+// overflow is logged and the answer on stdout stands.
+func TestProcessKeepsTheAnswerWhenStderrOverflows(t *testing.T) {
+	ctx, recorder := obs.Test(t)
+	binary := filepath.Join(t.TempDir(), "fixture")
+	body := fmt.Sprintf("#!/bin/sh\ncat >/dev/null\nhead -c %d /dev/zero >&2\nprintf '%%s' '{\"result\":\"answer\"}'\n", maxCapturedOutput+1)
+	if err := testjail.WriteExecutable(binary, []byte(body), 0700); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := ResolveClaude(config.Config{Claude: config.Claude{Binary: binary}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run(ctx, AskInput{ContentFiles: []string{"source.md"}, SourceLabels: []string{"source"}, Prompt: "Question"})
+	if err != nil || result.Answer != "answer" {
+		t.Fatalf("result=%+v err=%v; want the stdout answer kept", result, err)
+	}
+	want := "claude stderr exceeded the 8388608-byte capture limit; the rest was not kept"
+	var got []string
+	for _, record := range recorder.Records() {
+		if record.Message == "ask.stderr.truncated" {
+			got = append(got, fmt.Sprint(record.Fields["reason"]))
+		}
+	}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("stderr overflow log = %q, want [%q] (log %s)", got, want, recorder.Raw())
+	}
+}
+
+// TestProcessKeepsTheAnswerWhenADescendantHoldsItsOutput: an engine that
+// answered and exited is answered, whatever still holds its output streams:
+// a descendant it left behind, or a loaded scheduler that has not yet copied
+// them.
+func TestProcessKeepsTheAnswerWhenADescendantHoldsItsOutput(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "fixture")
+	pidFile := filepath.Join(root, "descendant.pid")
+	body := "#!/bin/sh\ncat >/dev/null\nsleep 30 &\necho $! >\"$ASK_DESCENDANT_PID\"\nprintf '%s' '{\"result\":\"answer\"}'\n"
+	if err := testjail.WriteExecutable(binary, []byte(body), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ASK_DESCENDANT_PID", pidFile)
+	t.Cleanup(func() {
+		raw, err := os.ReadFile(pidFile)
+		if err != nil {
+			t.Errorf("read the descendant's pid at %s: %v", pidFile, err)
+			return
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if err != nil {
+			t.Errorf("descendant pid %q in %s: %v", raw, pidFile, err)
+			return
+		}
+		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			t.Errorf("kill the descendant %d: %v", pid, err)
+		}
+	})
+	runner, err := ResolveClaude(config.Config{Claude: config.Claude{Binary: binary}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run(context.Background(), AskInput{ContentFiles: []string{"source.md"}, SourceLabels: []string{"source"}, Prompt: "Question"})
+	if err != nil || result.Answer != "answer" {
+		t.Fatalf("result=%+v err=%v; want the answer the engine wrote before it exited", result, err)
 	}
 }

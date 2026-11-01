@@ -31,6 +31,13 @@ func (h *Harvester) PublicCandidates(candidates []Candidate) ([]Candidate, error
 				publicCandidate.URL = strings.TrimSpace(candidate.URL)
 			} else {
 				handle, err := h.PublicHandle(candidate.URL)
+				if errors.Is(err, errNotPublicURL) {
+					// Unreadable through any handle: this one candidate is left
+					// out, the rest keep theirs.
+					log.Printf("harvest: search candidate %q left out: its location is not a public HTTP(S) URL",
+						logSource(candidate.URL))
+					continue
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -76,16 +83,19 @@ func publicIdentityHandle(source string) bool {
 	return false
 }
 
+// errNotPublicURL refuses a handle for a location no public read may reach.
+var errNotPublicURL = errors.New("public handle requires a public HTTP(S) URL")
+
 // PublicHandle validates and stores a public HTTP(S) target behind a stable
 // handle. The target is intentionally kept only in the private mapping.
 func (h *Harvester) PublicHandle(source string) (string, error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
-		return "", errors.New("public handle requires a public HTTP(S) URL")
+		return "", errNotPublicURL
 	}
 	if err := validateFetchURL(source, false); err != nil {
 		log.Printf("harvest: public handle rejected %q: %v", logSource(source), err)
-		return "", errors.New("public handle requires a public HTTP(S) URL")
+		return "", errNotPublicURL
 	}
 	root, err := h.resolvedCacheRoot()
 	if err != nil {

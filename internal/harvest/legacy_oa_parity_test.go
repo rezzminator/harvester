@@ -36,7 +36,7 @@ func TestLegacyFindWorksMergesPaperArxivAndBookDiscovery(t *testing.T) {
 		case strings.Contains(u, "export.arxiv.org"):
 			return `<feed><entry><title>A Mathematical Theory of Communication</title><id>http://arxiv.org/abs/2401.00001v1</id></entry></feed>`
 		case strings.Contains(u, "openlibrary.org/search.json"):
-			return `{"docs":[{"title":"A Mathematical Theory of Communication","author_name":["Fixture Author"],"first_publish_year":1950,"isbn":["9780000000000"],"ebook_access":"public"}]}`
+			return `{"docs":[{"title":"A Mathematical Theory of Communication","author_name":["Fixture Author"],"first_publish_year":1950,"isbn":["9780000000000"],"ebook_access":"public"},{"key":"/works/OL1W","title":"A Mathematical Theory of Communication","author_name":["Fixture Author"],"first_publish_year":1949,"ebook_access":"public"}]}`
 		case strings.Contains(u, "gutendex.com"):
 			return `{"results":[{"title":"A Mathematical Theory of Communication","copyright":false,"authors":[{"name":"Fixture Author"}],"formats":{"text/plain; charset=utf-8":"https://public.example.test/book.txt","text/html":"https://public.example.test/book.html"}}]}`
 		case strings.Contains(u, "library.oapen.org/rest/search"):
@@ -55,6 +55,7 @@ func TestLegacyFindWorksMergesPaperArxivAndBookDiscovery(t *testing.T) {
 		"10.1002/exact":                         false,
 		"https://arxiv.org/pdf/2401.00001v1":    false,
 		"isbn:9780000000000":                    false,
+		"https://openlibrary.org/works/OL1W":    false,
 		"https://public.example.test/book.html": false,
 	}
 	for _, candidate := range got {

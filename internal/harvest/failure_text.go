@@ -158,6 +158,8 @@ const (
 	// harvestpy's converterFailure wraps it: "harvestpy conversion failed
 	// (<class>): <message> (stderr: <tail>)".
 	converterFailedMarker = "harvestpy conversion failed ("
+	// emptyFailureLead opens the public text of a source that yielded no text.
+	emptyFailureLead = "The source was retrieved but yielded no readable content (empty after extraction)"
 	// converterFailureLead opens the public text of a converter's own failure.
 	converterFailureLead = "The document was retrieved but the converter could not read it: "
 	// unclassifiedLead opens the public text of a failure no class names.
@@ -254,16 +256,23 @@ func publicFailureTable(result Result, kind string) string {
 		}
 		return unsupportedFormatText(safeFormatLabel(result.Kind), "")
 	case errorKindEmpty:
-		if result.Error == localEmptyFileText {
-			return result.Error
+		if result.Error == localEmptyFileText || strings.HasPrefix(result.Error, emptyFailureLead) {
+			return result.Error // already published: a second pass keeps the converter's words
 		}
-		return "The source was retrieved but yielded no readable content (empty after extraction)." + rungs + " " + anotherCopyLead + "."
+		if result.converterError != "" {
+			return emptyFailureLead + " — the converter ran and read it blank: " +
+				redactFailureText(result.converterError) + "." + rungs + " " + anotherCopyLead + "."
+		}
+		return emptyFailureLead + "." + rungs + " " + anotherCopyLead + "."
 	case errorKindConversion:
 		if strings.HasPrefix(result.Error, converterFailureLead) {
 			return result.Error // already published: a second pass keeps the converter's words
 		}
 		if named := converterNamedFailure(result.Error); named != "" {
 			return converterFailureLead + named + "." + rungs + " " + anotherCopyLead + "."
+		}
+		if result.converterError != "" {
+			return converterFailureLead + redactFailureText(result.converterError) + "." + rungs + " " + anotherCopyLead + "."
 		}
 		return "The document was retrieved but could not be converted to text (converter or OCR error)." + rungs +
 			" Save the file with download_file, or " + anotherCopy + "."

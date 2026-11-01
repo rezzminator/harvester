@@ -279,8 +279,8 @@ func TestStackExchangeQuestionLoadsEveryAnswerAndComment(t *testing.T) {
 
 // TestStackExchangeGapsFlagThePartial: whatever the question advertises that
 // was not loaded — an answer page refused or throttled, stated answers or
-// comments the API did not list, another question's answers, an answer
-// stating no comment count — flags the artifact partial and is named.
+// comments the API did not list, another question's answers, the question or
+// an answer stating no comment count — flags the artifact partial and is named.
 func TestStackExchangeGapsFlagThePartial(t *testing.T) {
 	t.Parallel()
 	page2 := seQuestionAPI + "/answers#2"
@@ -327,6 +327,14 @@ func TestStackExchangeGapsFlagThePartial(t *testing.T) {
 					`"comment_count": 15`, 1)
 			},
 			[]string{"143 of 145 stated comments loaded", "the question: 15 stated comment(s) · 13 loaded"},
+			"",
+		},
+		{
+			"the question stating no comment count",
+			func(site *seSite) {
+				site.api[seQuestionAPI] = strings.Replace(site.api[seQuestionAPI], `"comment_count": 13,`, "", 1)
+			},
+			[]string{"130 of 130 stated comments loaded", "the question: the stated comment count was not read"},
 			"",
 		},
 		{

@@ -302,11 +302,13 @@ func TestRenderReadItemKeepsAPublishedFailuresText(t *testing.T) {
 	source := "/tmp/demo/broken-feed.xml"
 	published := harvest.PublicFailure(source, harvest.Result{
 		Source: source, Kind: "feed",
-		Error: "harvestpy conversion failed (ValueError): ValueError: the feed parsed to no title and no items: " +
-			"a broken or empty feed; a feedparser fallback on a broken feed is unmeasured (stderr: )",
+		Error: "harvestpy conversion failed (ValueError): ValueError: the XML has no root element: " +
+			"Start tag expected, '<' not found (stderr: conversion failed for kind='feed': ValueError: " +
+			"the XML has no root element: Start tag expected, '<' not found)",
 	})
 	text, failed := RenderReadItem(1, 1, source, published, ReadView{})
-	if !failed || strings.Contains(text, "ambiguous") || !strings.Contains(text, "a broken or empty feed") {
+	if !failed || strings.Contains(text, "ambiguous") ||
+		!strings.Contains(text, "the XML has no root element: Start tag expected, '<' not found") {
 		t.Fatalf("RenderReadItem = %q (failed %v), want the converter's named failure", text, failed)
 	}
 }

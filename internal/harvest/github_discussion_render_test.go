@@ -38,6 +38,19 @@ func TestGitHubDiscussionUnloadedFlagsThePartial(t *testing.T) {
 			},
 		},
 		{
+			"a reply whose comment is not in the page",
+			func(site *ghdSite) {
+				site.answers[ghdPath] = strings.Replace(site.answers[ghdPath],
+					"child-comments-discussioncomment-3966674", "child-comments-discussioncomment-9999999", 1)
+			},
+			[]string{
+				"\n## Replies to a comment not in the page\n\n- **",
+				"[#3986566](" + ghdURL + "#discussioncomment-3986566)",
+				"**Replies:** 4 stated · 4 loaded",
+				"1 reply(s) whose comment is not in the page, shown apart",
+			},
+		},
+		{
 			"the stated counts removed",
 			func(site *ghdSite) {
 				site.answers[ghdPath] = strings.Replace(site.answers[ghdPath], "4 comments", "", 1)

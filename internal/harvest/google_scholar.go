@@ -172,15 +172,14 @@ func parseGoogleScholarRows(body []byte, limit int, wantedDOI string) []scholarR
 		if titleNode == nil {
 			continue
 		}
-		anchor := firstElement(titleNode, "a")
-		if anchor == nil {
-			continue
-		}
 		title := strings.TrimSpace(nodeText(titleNode))
-		for _, marker := range []string{"[HTML]", "[PDF]", "[BOOK]"} {
+		for _, marker := range []string{"[HTML]", "[PDF]", "[BOOK]", "[CITATION]", "[C]"} {
 			title = strings.TrimSpace(strings.TrimPrefix(title, marker))
 		}
-		titleLink := nodeAttr(anchor, "href")
+		titleLink := "" // a [CITATION] row has no title link; the check below keeps it by its side links
+		if anchor := firstElement(titleNode, "a"); anchor != nil {
+			titleLink = nodeAttr(anchor, "href")
+		}
 		year := 0
 		authors := ""
 		if summary := firstClass(row, "gs_a"); summary != nil {

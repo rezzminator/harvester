@@ -68,13 +68,18 @@ def html_metadata(raw: str) -> dict[str, str]:
         reason = f"HTML metadata extraction failed: {type(exc).__name__}: {exc}"
         print(reason, file=sys.stderr)
         _conversion_gap(reason)
-        return {"metadata_error": reason}
+        return {}
     if meta is None:
         return {}
     author = _clean(getattr(meta, "author", ""))
     if author.casefold() in _JUNK_AUTHORS:
         author = ""
-    author = _cited_authors(raw) or author
+    try:
+        author = _cited_authors(raw) or author
+    except Exception as exc:
+        reason = f"citation author extraction failed: {type(exc).__name__}: {exc}"
+        print(reason, file=sys.stderr)
+        _conversion_gap(reason)
     fields = (
         ("title", _clean(getattr(meta, "title", ""))),
         ("author", author),
@@ -114,6 +119,13 @@ def _cited_authors(raw: str) -> str:
     return "; ".join(names)
 
 
+def _decode_html(raw: bytes) -> str:
+    """Valid UTF-8 as is; otherwise the charset trafilatura detects, else UTF-8 with a visible U+FFFD per bad byte."""
+    from trafilatura.utils import decode_file
+
+    return decode_file(raw)
+
+
 def convert_html(path: pathlib.Path, base_url: str = "") -> str:
     import trafilatura
     from trafilatura.utils import load_html
@@ -124,9 +136,7 @@ def convert_html(path: pathlib.Path, base_url: str = "") -> str:
     _keep_quotes_in_list_items()
     _keep_share_word_headings()
     _keep_extensionless_images()
-    # Local HTML follows the old dispatch path, which decodes malformed bytes
-    # with errors ignored before trafilatura sees the document.
-    raw = path.read_bytes().decode("utf-8", errors="ignore")
+    raw = _decode_html(path.read_bytes())
     tree = load_html(raw)
     islands = _Islands(raw)
     if tree is not None:
@@ -1469,7 +1479,7 @@ def convert_html_full(path: pathlib.Path, base_url: str = "") -> str:
     from markitdown import MarkItDown
     from trafilatura.utils import load_html
 
-    raw = path.read_bytes().decode("utf-8", errors="ignore")
+    raw = _decode_html(path.read_bytes())
     tree = load_html(raw)
     if tree is None:
         source = raw
@@ -1769,7 +1779,7 @@ def _pdf_checked_text(page, markdown: str, ocr: bool) -> tuple[str, list[str]]:
     return markdown, gaps
 
 
-def convert_pdf(path: pathlib.Path, request: dict) -> tuple[str, dict]:
+def convert_pdf(path: pathlib.Path, request: dict) -> str:
     import pymupdf
 
     # Env flags snapshot at process start set the DEFAULTS; a request carrying
@@ -1783,17 +1793,29 @@ def convert_pdf(path: pathlib.Path, request: dict) -> tuple[str, dict]:
         flagged = [index for index, page in enumerate(document) if forced or ocr_page_needed(page_features(page))]
         page_count = document.page_count
         parts, gaps = [], []
-        ocr_pages = {}
+        ocr_pages, unstaged = {}, None
         if flagged:
             script, reason = choose_ocr_script(document, str(request.get("ocr_language") or ""))
-            ocr_pages, limits = _ocr_pages(document, flagged, script)
-            parts.append(_note(f"OCR read page(s) {_page_list(flagged)} of {page_count} as {_SCRIPT_NAMES[script]} ({reason})"))
+            try:
+                ocr_pages, limits = _ocr_pages(document, flagged, script)
+            except OCRModelsNotStaged as exc:
+                # The text-layer pages still convert; only the flagged pages wait for `harvester setup`.
+                unstaged, limits = exc, [f"{exc}; page(s) {_page_list(flagged)} were not read"]
             gaps.extend(limits)
-            gaps.append(f"OCR page(s) {_page_list(flagged)}: image-only text completeness cannot be verified")
+            if not unstaged:
+                parts.append(_note(f"OCR read page(s) {_page_list(flagged)} of {page_count} as {_SCRIPT_NAMES[script]} ({reason})"))
+                gaps.append(f"OCR page(s) {_page_list(flagged)}: image-only text completeness cannot be verified")
         images = []
         readable = False
         for index, page in enumerate(document):
-            markdown = ocr_pages.get(index, "") if index in flagged else _pymupdf4llm_markdown(path, layout, [index])
+            if unstaged and index in flagged:
+                continue  # never the flagged page's unreadable text layer as if it were the page
+            markdown = ocr_pages.get(index, "")
+            if index not in flagged:
+                try:
+                    markdown = _pymupdf4llm_markdown(path, layout, [index])
+                except Exception as exc:  # one page's extraction never ends the document: its native text stands in
+                    gaps.append(f"PDF page {index + 1}: Markdown extraction failed ({type(exc).__name__}: {exc})")
             markdown, losses = _pdf_checked_text(page, markdown, index in flagged)
             readable = readable or bool(markdown.strip())
             gaps.extend(losses)
@@ -1801,15 +1823,11 @@ def convert_pdf(path: pathlib.Path, request: dict) -> tuple[str, dict]:
                 images.append(index)
             parts.append(markdown)
         if flagged and len(flagged) == page_count and not readable and limits:
-            raise OCRUnavailable("; ".join(limits))
+            raise unstaged or OCRUnavailable("; ".join(limits))
         if images:
             gaps.append(f"PDF page(s) {_page_list(images)}: images were not OCR-read, image-only text may be missing")
         parts = [f"_Converter gap: {gap}_" for gap in gaps] + parts
-    return "\n\n".join(part for part in parts if part.strip()), {
-        "ocr": "enabled" if flagged else "not-needed",
-        "layout": "enabled" if layout else "disabled",
-        "models": "staged" if flagged else "not-requested",
-    }
+    return "\n\n".join(part for part in parts if part.strip())
 
 
 # ---------------------------------------------------------------------------
@@ -2222,7 +2240,7 @@ def convert_json(path: pathlib.Path) -> str:
         # document's FULL path, and Go splices this stderr tail into the error
         # a caller reads.
         print(f"JSON parse failed; passing through raw text: {bounded_error(exc, path)}", file=sys.stderr)
-        return "_Converter gap: JSON could not be parsed; the raw text is shown_\n\n" + text.strip() + "\n"
+        return _raw_text(text, "JSON could not be parsed")
     _RESULT_META["transformed"] = "json-outline"
     return "\n".join(_json_outline(value, "")) + "\n"
 
@@ -2339,13 +2357,13 @@ def convert_text(path: pathlib.Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def _html(path: pathlib.Path, request: dict) -> tuple[str, dict]:
+def _html(path: pathlib.Path, request: dict) -> str:
     base_url = str(request.get("base_url") or "")
-    return (convert_html_full(path, base_url) if request.get("full_dom") else convert_html(path, base_url)), {}
+    return convert_html_full(path, base_url) if request.get("full_dom") else convert_html(path, base_url)
 
 
 def _plain(convert_one):
-    return lambda path, _request: (convert_one(path), {})
+    return lambda path, _request: convert_one(path)
 
 
 # The text formats below are the bake-off winners (the formats bake-off's
@@ -2370,6 +2388,11 @@ _BOMB_REFUSAL = (
 
 def _note(text: str) -> str:
     return f"_Converter note: {text}_"
+
+
+def _raw_text(text: str, why: str) -> str:
+    """A document its parser cannot read keeps its raw text under a gap naming why: never lost to one bad part."""
+    return f"_Converter gap: {why}; the raw text is shown_\n\n" + text.strip() + "\n"
 
 
 def _xml_root(path: pathlib.Path, recover: bool):
@@ -2451,11 +2474,8 @@ def convert_feed(path: pathlib.Path) -> str:
         items = [c for c in root.iter() if _lname(c) in ("item", "entry")]
     title = _itxt(_child(feed, "title"))
     if not items and not title:
-        raise ValueError(
-            "the feed parsed to no title and no items: a broken or empty feed"
-            + (f" ({errors[0].message.strip()})" if errors else "")
-            + "; a feedparser fallback on a broken feed is unmeasured"
-        )
+        broken = f" ({errors[0].message.strip()})" if errors else ""
+        return _raw_text(_decode_text(path.read_bytes()), "the feed parsed to no title and no items" + broken)
     label = {"feed": "Atom", "rss": "RSS"}.get(shape.casefold(), "RDF/RSS 1.0")
     blocks = [f"# {title}", f"{label} feed · {len(items)} items"]
     for item in items:
@@ -2490,7 +2510,7 @@ def convert_feed(path: pathlib.Path) -> str:
 
 
 def convert_jats(path: pathlib.Path) -> str:
-    root, _errors = _xml_root(path, recover=False)
+    root, errors = _xml_root(path, recover=True)
     blocks: list[str] = []
     flattened = [0]
 
@@ -2603,6 +2623,13 @@ def convert_jats(path: pathlib.Path) -> str:
             authors.append(" ".join(parts))
     if authors:
         blocks.append("Authors: " + ", ".join(authors))
+    contributors = []
+    for contrib in (x for x in root.iter() if _lname(x) == "contrib" and x.get("contrib-type") != "author"):
+        parts = [_itxt(x) for x in contrib.iter() if _lname(x) in ("given-names", "surname")]
+        if parts:
+            contributors.append(f"{' '.join(parts)} ({contrib.get('contrib-type') or 'contributor'})")
+    if contributors:
+        blocks.append("Contributors: " + ", ".join(contributors))
     for abstract in (x for x in root.iter() if _lname(x) == "abstract"):
         blocks.append("## Abstract")
         if len(abstract):
@@ -2625,6 +2652,13 @@ def convert_jats(path: pathlib.Path) -> str:
             walk_one(child, 1)
     if flattened[0]:
         blocks.append(_note(f"{flattened[0]} MathML formulas carry no TeX and are flattened to linear text"))
+    if errors:
+        blocks.append(
+            _note(
+                f"the XML is malformed ({errors[0].message.strip()}, line {errors[0].line}); "
+                "the article was read as recovered and text past the break may be missing"
+            )
+        )
     return "\n\n".join(b for b in blocks if b.strip())
 
 
@@ -2701,9 +2735,13 @@ _NOTEBOOK_OUTPUT_CAP = 20000
 
 
 def convert_ipynb(path: pathlib.Path) -> str:
-    notebook = json.loads(path.read_bytes().decode("utf-8-sig"))
+    text = path.read_bytes().decode("utf-8-sig", errors="replace")
+    try:
+        notebook = json.loads(text)
+    except ValueError as exc:
+        return _raw_text(text, f"the notebook JSON could not be parsed ({exc})")
     if not isinstance(notebook, dict) or not isinstance(notebook.get("cells"), list):
-        raise ValueError("the notebook has no cells list: not a Jupyter notebook")
+        return _raw_text(text, "the notebook has no cells list")
     language = ((notebook.get("metadata") or {}).get("language_info") or {}).get("name", "python")
 
     def joined(value) -> str:
@@ -2720,6 +2758,7 @@ def convert_ipynb(path: pathlib.Path) -> str:
             blocks.append(source)
             continue
         if kind != "code":
+            blocks.append(_note(f"a cell of type {kind!r} is kept as raw text") + "\n\n" + source)
             continue
         blocks.append(f"```{language}\n{source}\n```")
         for output in cell.get("outputs", []):
@@ -2783,7 +2822,7 @@ def convert_captions(path: pathlib.Path) -> str:
             lines.append(line)
             recent = (recent + [line])[-3:]
     if not cues:
-        raise ValueError("the captions file has no timed cues (no '-->' line)")
+        return _raw_text(text, "the captions file has no timed cues (no '-->' line)")
     return f"Captions: {cues} cues\n\n" + "\n".join(lines)
 
 
@@ -2793,8 +2832,9 @@ _RIS_NOTE = "RIS and BibTeX parsing is untested on messy exports"
 
 
 def convert_ris(path: pathlib.Path) -> str:
-    entries, current, last = [], None, None
-    for line in _decode_text(path.read_bytes()).splitlines():
+    entries, current, last, stray = [], None, None, []
+    text = _decode_text(path.read_bytes())
+    for line in text.splitlines():
         match = _RIS_LINE.match(line.rstrip())
         if match:
             tag, value = match.group(1), (match.group(2) or "").strip()
@@ -2807,14 +2847,18 @@ def convert_ris(path: pathlib.Path) -> str:
             elif current is not None:
                 current.append((tag, value))
                 last = tag
+            else:
+                stray.append(line.strip())
         elif current is not None and last and line.strip():
             tag, value = current[-1]
             current[-1] = (tag, value + " " + line.strip())
+        elif line.strip():
+            stray.append(line.strip())
     unterminated = current is not None
     if unterminated:
         entries.append(current)
     if not entries:
-        raise ValueError("the RIS file has no records (no 'TY  - ' line)")
+        return _raw_text(text, "the RIS file has no records (no 'TY  - ' line)")
     blocks = [f"RIS: {len(entries)} records"]
     for entry in entries:
         title = next((v for t, v in entry if t in _RIS_TITLE), "") or "(untitled record)"
@@ -2822,6 +2866,9 @@ def convert_ris(path: pathlib.Path) -> str:
         blocks.append("\n".join(f"- {t}: {v}" for t, v in entry if t not in _RIS_TITLE and v))
     if unterminated:
         blocks.append(_note("the last record has no ER line; it is kept as read"))
+    if stray:
+        kept = "\n".join(stray)
+        blocks.append(_note(f"{len(stray)} lines sit outside any record's tags; they are kept as read") + "\n\n" + kept)
     blocks.append(_note(_RIS_NOTE))
     return "\n\n".join(blocks)
 
@@ -2853,7 +2900,7 @@ def _html_body(markup: str, request: dict) -> str:
     with tempfile.TemporaryDirectory() as scratch:
         page = pathlib.Path(scratch) / "page.html"
         page.write_text(markup, encoding="utf-8")
-        return _html(page, request)[0]
+        return _html(page, request)
 
 
 def _resource_list(title: str, resources: list[str]) -> str:
@@ -2864,25 +2911,31 @@ def _resource_list(title: str, resources: list[str]) -> str:
     return f"## {title}\n\n" + "\n".join(f"- {r}" for r in shown) + more
 
 
-def convert_mhtml(path: pathlib.Path, request: dict) -> tuple[str, dict]:
+def convert_mhtml(path: pathlib.Path, request: dict) -> str:
     import email
     from email import policy
 
     message = email.message_from_bytes(path.read_bytes(), policy=policy.default)
     parts = [p for p in message.walk() if not p.is_multipart()]
     page = next((p for p in parts if p.get_content_type() == "text/html"), None)
-    if page is None:
-        raise ValueError(f"the MHTML archive has no text/html part ({len(parts)} parts)")
+    if page is not None:
+        body = _html_body(page.get_content(), request)
+    else:
+        page = next((p for p in parts if p.get_content_maintype() == "text"), None)
+        if page is None:
+            body = _conversion_gap(f"the MHTML archive has no text part ({len(parts)} parts); its parts are listed")
+        else:
+            body = _note(f"the MHTML archive has no text/html part; its {page.get_content_type()} part is shown")
+            body += "\n\n" + page.get_content().strip()
     rest = [
         f"{p.get('Content-Location') or p.get('Content-ID') or '(unnamed)'} ({p.get_content_type()})"
         for p in parts
         if p is not page
     ]
-    body = _html_body(page.get_content(), request)
-    return "\n\n".join(b for b in (body, _resource_list("Archived resources, not inlined", rest)) if b), {}
+    return "\n\n".join(b for b in (body, _resource_list("Archived resources, not inlined", rest)) if b)
 
 
-def convert_eml(path: pathlib.Path, request: dict) -> tuple[str, dict]:
+def convert_eml(path: pathlib.Path, request: dict) -> str:
     import email
     from email import policy
 
@@ -2895,15 +2948,18 @@ def convert_eml(path: pathlib.Path, request: dict) -> tuple[str, dict]:
     if body is not None:
         content = body.get_content()
         blocks.append(_html_body(content, request) if body.get_content_type() == "text/html" else content.strip())
+    else:
+        kinds = ", ".join(p.get_content_type() for p in message.walk() if not p.is_multipart())
+        blocks.append(_conversion_gap(f"the email has no plain or HTML body part (parts: {kinds})"))
     attachments = []
     for part in message.iter_attachments():
         payload = part.get_payload(decode=True) or b""
         attachments.append(f"{part.get_filename() or '(unnamed)'} ({part.get_content_type()}, {len(payload)} bytes)")
     blocks.append(_resource_list("Attachments, not inlined", attachments))
-    return "\n\n".join(b for b in blocks if b), {}
+    return "\n\n".join(b for b in blocks if b)
 
 
-def convert_webarchive(path: pathlib.Path, request: dict) -> tuple[str, dict]:
+def convert_webarchive(path: pathlib.Path, request: dict) -> str:
     import plistlib
 
     archive = plistlib.loads(path.read_bytes())
@@ -2921,7 +2977,7 @@ def convert_webarchive(path: pathlib.Path, request: dict) -> tuple[str, dict]:
     elif mime.startswith("text/"):
         body = text.strip()
     else:
-        raise ValueError(f"the web archive's main resource is {mime or 'untyped'}, not a page the harvester reads")
+        body = _conversion_gap(f"the web archive's main resource is {mime or 'untyped'}, not a page the harvester reads")
     rest = [
         f"{r.get('WebResourceURL', '(unnamed)')} ({r.get('WebResourceMIMEType', 'untyped')})"
         for r in archive.get("WebSubresources", [])
@@ -2929,7 +2985,7 @@ def convert_webarchive(path: pathlib.Path, request: dict) -> tuple[str, dict]:
     ]
     frames = archive.get("WebSubframeArchives", [])
     rest += [f"subframe {(f.get('WebMainResource') or {}).get('WebResourceURL', '(unnamed)')}" for f in frames]
-    return "\n\n".join(b for b in (body, _resource_list("Archived resources, not inlined", rest)) if b), {}
+    return "\n\n".join(b for b in (body, _resource_list("Archived resources, not inlined", rest)) if b)
 
 
 # The Office family, per the office bake-off's verdicts: legacy DOC through
@@ -3323,12 +3379,12 @@ def convert(request: dict) -> dict:
     declared = str(request.get("kind", ""))
     kind = _kind(path, declared)
     try:
-        converter = _CONVERTERS.get(kind)
-        if converter is None:
-            raise ValueError(f"unsupported conversion kind: {kind!r}")
+        converter = _CONVERTERS.get(kind) or (
+            lambda path, _request: _raw_text(_decode_text(path.read_bytes()), f"no converter reads kind {kind!r}")
+        )
         _RESULT_META.clear()
         _RESULT_GAPS.clear()
-        markdown, features = converter(path, request)
+        markdown = converter(path, request)
     except Exception as exc:
         # A crashed pipeline is a FAILED conversion, never an empty document.
         # The old EMPTY-text contract answered ok:true here, so a docling/
@@ -3342,7 +3398,6 @@ def convert(request: dict) -> dict:
         print(f"conversion failed for kind={kind!r}: {summary}", file=sys.stderr)
         return {
             "ok": False,
-            "kind": kind,
             "error_class": type(exc).__name__,
             "error": summary,
         }
@@ -3350,7 +3405,7 @@ def convert(request: dict) -> dict:
     for gap in _RESULT_GAPS:
         if gap not in markdown:
             markdown += "\n\n" + gap
-    response = {"ok": True, "markdown": markdown, "kind": kind, "features": features}
+    response = {"ok": True, "markdown": markdown}
     if _RESULT_META:
         response["meta"] = dict(_RESULT_META)
     return response

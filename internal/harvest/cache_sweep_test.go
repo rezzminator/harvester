@@ -194,9 +194,15 @@ func TestCacheSweepFailureOnlyLogs(t *testing.T) {
 	_, recorder := obs.Test(t)
 	root := t.TempDir()
 	stuck := writeAgedCacheFile(t, root, agedCacheFile{"pdf/stuck.pdf", 31 * 24 * time.Hour, 3, true}, time.Now())
+	// The sweep walks the resolved cache root, so it names the file canonically (a temp root
+	// under a linked ancestor, as macOS's /var -> /private/var, differs from its lexical name).
+	swept, err := filepath.EvalSymlinks(stuck)
+	if err != nil {
+		t.Fatal(err)
+	}
 	restore := cacheSweepRemove
 	cacheSweepRemove = func(path string) error {
-		if path == stuck {
+		if path == swept {
 			return errors.New("permission denied")
 		}
 		return os.Remove(path)
@@ -214,7 +220,7 @@ func TestCacheSweepFailureOnlyLogs(t *testing.T) {
 		t.Fatalf("failed removal lost the file: %v", err)
 	}
 	for _, record := range recorder.Records() {
-		if path, _ := record.Field("path"); record.Message == "harvest.cache_sweep" && path == stuck &&
+		if path, _ := record.Field("path"); record.Message == "harvest.cache_sweep" && path == swept &&
 			record.Level == "WARN" {
 			return
 		}

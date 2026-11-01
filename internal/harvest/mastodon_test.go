@@ -289,3 +289,102 @@ func TestMastodonStatusIDReadsEveryURIForm(t *testing.T) {
 		}
 	}
 }
+
+// TestMastodonStatesNoCountAndKeepsARepliesWhoseParentTheAPIHides: a status
+// record stating no replies_count still renders, its count line reading
+// unstated; a context holding a reply whose parent the API leaves out (a
+// filtered, blocked or deleted status) is kept, the reply shown under the
+// status and named in the partial; a context none of whose replies answers the
+// status is not its context.
+func TestMastodonStatesNoCountAndKeepsARepliesWhoseParentTheAPIHides(t *testing.T) {
+	t.Parallel()
+	contextKey := "social.example" + mastoAPI + "/context"
+	t.Run("no replies_count", func(t *testing.T) {
+		t.Parallel()
+		site := mastoSite(t)
+		site.answers["social.example"+mastoAPI] = strings.Replace(site.answers["social.example"+mastoAPI],
+			`"replies_count": 7`, `"replies_counts": 7`, 1)
+		result := site.harvester(t).FetchWithOptions(context.Background(), mastoURL, FetchOptions{Refresh: true})
+		if result.Error != "" || result.Partial != "" || len(mastoRendered(result.Content)) != 12 ||
+			!strings.Contains(result.Content, "**Replies:** unstated · 12 loaded\n\n") {
+			t.Fatalf("the unstated status is not complete: partial=%q error=%q\n%.1500s", result.Partial,
+				result.Error, result.Content)
+		}
+	})
+	t.Run("a reply whose parent is hidden", func(t *testing.T) {
+		t.Parallel()
+		// No status the API lists states the hidden parent: the 11 replies
+		// stated are the others, the reply one more.
+		site := mastoSite(t)
+		var hidden map[string]any
+		if err := json.Unmarshal([]byte(site.answers[contextKey]), &hidden); err != nil {
+			t.Fatal(err)
+		}
+		for _, reply := range hidden["descendants"].([]any) {
+			switch reply := reply.(map[string]any); reply["id"] {
+			case "117117366157443632":
+				reply["in_reply_to_id"] = "117117000000000000"
+			case "117117335882564813":
+				reply["replies_count"] = 0
+			}
+		}
+		rewritten, err := json.Marshal(hidden)
+		if err != nil {
+			t.Fatal(err)
+		}
+		site.answers[contextKey] = string(rewritten)
+		result := site.harvester(t).FetchWithOptions(context.Background(), mastoURL, FetchOptions{Refresh: true})
+		wantPartial := "mastodon status: 12 of 11 stated replies loaded — 1 repl(ies) answer a status the API did " +
+			"not serve (filtered, blocked or deleted): shown under the post"
+		if result.Partial != wantPartial || len(mastoRendered(result.Content)) != 12 {
+			t.Fatalf("the orphan reply is not kept: partial=%q want %q error=%q\n%.2500s", result.Partial,
+				wantPartial, result.Error, result.Content)
+		}
+		if !regexp.MustCompile(`\n- \*\*@[^\n]*\[117117366157443632\]`).MatchString(result.Content) {
+			t.Fatalf("the orphan reply is not a top-level reply of the status:\n%.2500s", result.Content)
+		}
+	})
+	t.Run("a reply served without a parent id", func(t *testing.T) {
+		t.Parallel()
+		site := mastoSite(t)
+		var served map[string]any
+		if err := json.Unmarshal([]byte(site.answers[contextKey]), &served); err != nil {
+			t.Fatal(err)
+		}
+		for _, reply := range served["descendants"].([]any) {
+			switch reply := reply.(map[string]any); reply["id"] {
+			case "117117366157443632":
+				reply["in_reply_to_id"] = nil
+			case "117117335882564813":
+				reply["replies_count"] = 0
+			}
+		}
+		rewritten, err := json.Marshal(served)
+		if err != nil {
+			t.Fatal(err)
+		}
+		site.answers[contextKey] = string(rewritten)
+		result := site.harvester(t).FetchWithOptions(context.Background(), mastoURL, FetchOptions{Refresh: true})
+		wantPartial := "mastodon status: 12 of 11 stated replies loaded — 1 repl(ies) for which the API named no " +
+			"parent: shown under the status"
+		if result.Partial != wantPartial || len(mastoRendered(result.Content)) != 12 {
+			t.Fatalf("the reply without a parent is not kept: partial=%q want %q error=%q\n%.2500s", result.Partial,
+				wantPartial, result.Error, result.Content)
+		}
+		if !regexp.MustCompile(`\n- \*\*@[^\n]*\[117117366157443632\]`).MatchString(result.Content) {
+			t.Fatalf("the reply without a parent is not a top-level reply of the status:\n%.2500s", result.Content)
+		}
+	})
+	t.Run("a context of no reply to the status", func(t *testing.T) {
+		t.Parallel()
+		site := mastoSite(t)
+		site.answers[contextKey] = strings.ReplaceAll(site.answers[contextKey],
+			`"in_reply_to_id": "117117221397911074"`, `"in_reply_to_id": "117117000000000000"`)
+		result := site.servingHarvester(t).FetchWithOptions(context.Background(), mastoURL,
+			FetchOptions{Refresh: true})
+		if !strings.Contains(result.Partial, "the status's context API answer was not loaded") {
+			t.Fatalf("a context none of whose replies answers the status was kept: %q (error %q)", result.Partial,
+				result.Error)
+		}
+	})
+}

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -256,17 +257,33 @@ func isPrivateMetadataPath(path, root string) bool {
 	return false
 }
 
-func readBoundedFile(path string, limit int64) (data []byte, returnErr error) {
-	if limit <= 0 {
-		limit = publicReadLimit
-	}
+func readBoundedFile(path string, limit int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
+	return readBounded(f, path, limit)
+}
+
+// boundedFile is the open artifact readBounded reads: an *os.File.
+type boundedFile interface {
+	io.ReadCloser
+	Stat() (fs.FileInfo, error)
+}
+
+func readBounded(f boundedFile, path string, limit int64) (data []byte, returnErr error) {
+	if limit <= 0 {
+		limit = publicReadLimit
+	}
 	defer func() {
-		if err := f.Close(); err != nil {
+		err := f.Close()
+		switch {
+		case err == nil:
+		case returnErr != nil:
 			returnErr = errors.Join(returnErr, fmt.Errorf("close artifact %s: %w", path, err))
+		default:
+			// a read-only close after a whole read loses nothing: the data stands
+			log.Printf("harvest: close artifact %s after a whole read: %v", path, err)
 		}
 	}()
 	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
@@ -277,7 +294,7 @@ func readBoundedFile(path string, limit int64) (data []byte, returnErr error) {
 	} else if info.Size() > limit {
 		return nil, errors.New("artifact exceeds public size limit")
 	}
-	data, err = io.ReadAll(io.LimitReader(f, limit+1))
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return nil, err
 	}
@@ -308,9 +325,23 @@ func symlinkBelow(path, root string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	rel, err := filepath.Rel(root, path)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return false, errors.New("path is outside namespace")
+	below := func(root string) (string, bool) {
+		rel, err := filepath.Rel(root, path)
+		return rel, err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+	}
+	rel, inside := below(root)
+	if !inside {
+		// A path named canonically (through a linked ancestor of root, as macOS's /var ->
+		// /private/var) is matched against the canonical root, canonical with canonical; the
+		// walk below still finds a link planted inside the namespace.
+		canonicalRoot, canonicalErr := canonicalPublicPath(root)
+		if canonicalErr != nil {
+			return false, canonicalErr
+		}
+		if rel, inside = below(canonicalRoot); !inside {
+			return false, errors.New("path is outside namespace")
+		}
+		root = canonicalRoot
 	}
 	current := root
 	if rel == "." {

@@ -373,7 +373,7 @@ func linkedInHubPage(doc *html.Node, address string, entities []ldEntity) (strin
 	}
 	var lines []string
 	for index, entry := range list.Items {
-		if entry.Item == nil || entry.Item.Name == "" {
+		if entry.Item == nil || (entry.Item.Name == "" && entry.Item.URL == "") {
 			continue
 		}
 		rank := string(entry.Position)
@@ -381,7 +381,10 @@ func linkedInHubPage(doc *html.Node, address string, entities []ldEntity) (strin
 			rank = fmt.Sprint(index + 1)
 		}
 		label := string(entry.Item.Name)
-		if entry.Item.URL != "" {
+		switch {
+		case label == "":
+			label = linkedInCleanURL(string(entry.Item.URL)) // no name: the address stands in
+		case entry.Item.URL != "":
 			label = "[" + label + "](" + linkedInCleanURL(string(entry.Item.URL)) + ")"
 		}
 		lines = append(lines, rank+". "+linkedInJoin(" · ", label, linkedInJoin(", ",
@@ -430,14 +433,17 @@ func linkedInJobCards(doc *html.Node, page *url.URL) []string {
 			continue
 		}
 		title := linkedInFirstClassText(card, "base-search-card__title", "base-main-card__title")
-		if title == "" {
-			continue
-		}
 		link := nodeAttr(card, "href")
 		if anchor := firstClass(card, "base-card__full-link"); anchor != nil {
 			link = nodeAttr(anchor, "href")
 		}
-		if link = linkedInLink(page, link); link != "" {
+		link = linkedInLink(page, link)
+		switch {
+		case title == "" && link == "":
+			continue
+		case title == "":
+			title = link // no title: the link stands in
+		case link != "":
 			title = "[" + title + "](" + link + ")"
 		}
 		listed := ""

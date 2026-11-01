@@ -1,14 +1,13 @@
 package ask
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/rezzminator/harvester/internal/clock"
 	"github.com/rezzminator/harvester/internal/config"
@@ -97,9 +96,21 @@ func (runner processEngine) Run(parent context.Context, input AskInput) (AskResu
 		}
 		args = append(args, "--json", "--ephemeral", "--skip-git-repo-check", "--color", "never")
 	}
+	streams := make([]*os.File, 0, 3)
+	defer func() {
+		for _, stream := range streams {
+			_ = stream.Close() // unlinked: closing frees it, nothing is left to lose
+		}
+	}()
+	for _, content := range []string{prompt, "", ""} {
+		stream, err := engineStream(content)
+		if err != nil {
+			return AskResult{}, err
+		}
+		streams = append(streams, stream)
+	}
 	started := clock.Real.Now()
-	var stdout, stderr boundedBuffer
-	runErr := runProcess(ctx, args, deps.StartOptions{Env: processEnvironment(), Stdin: strings.NewReader(prompt), Stdout: &stdout, Stderr: &stderr, ProcessGroup: true, WaitDelay: 500 * time.Millisecond})
+	runErr := runProcess(ctx, args, deps.StartOptions{Env: processEnvironment(), Stdin: streams[0], Stdout: streams[1], Stderr: streams[2], ProcessGroup: true})
 	name := engine.MustLookup(runner.engine).LongName
 	if ctx.Err() != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -107,14 +118,31 @@ func (runner processEngine) Run(parent context.Context, input AskInput) (AskResu
 		}
 		return AskResult{}, fmt.Errorf("%s ask canceled: %w", name, ctx.Err())
 	}
-	if stdout.truncated || stderr.truncated {
+	stdout, stdoutTruncated, err := captured(streams[1])
+	if err != nil {
+		return AskResult{}, fmt.Errorf("%s ask failed: %w", name, err)
+	}
+	if stdoutTruncated {
 		return AskResult{}, fmt.Errorf("%s ask failed: normalized headless output exceeded the %d-byte capture limit", name, maxCapturedOutput)
 	}
-	if runErr != nil {
-		return AskResult{}, fmt.Errorf("%s ask failed: %w; stderr tail %q; stdout tail %q", name, runErr, boundedTail(stderr.String(), 1024), boundedTail(stdout.String(), 1024))
+	log := obs.Logger(ctx)
+	// stderr is diagnostics only: neither its overflow nor its loss ever costs the answer on stdout.
+	stderr, stderrTruncated, err := captured(streams[2])
+	if err != nil {
+		log.Warn("ask.stderr.unread", "reason", fmt.Sprintf("%s stderr: %v", name, err))
 	}
-	output := processOutput{Stdout: stdout.String()}
-	if err := parseOutput(&output, runner.engine); err != nil {
+	if stderrTruncated {
+		log.Warn("ask.stderr.truncated", "reason", fmt.Sprintf("%s stderr exceeded the %d-byte capture limit; the rest was not kept", name, maxCapturedOutput))
+	}
+	if runErr != nil {
+		return AskResult{}, fmt.Errorf("%s ask failed: %w; stderr tail %q; stdout tail %q", name, runErr, boundedTail(stderr, 1024), boundedTail(stdout, 1024))
+	}
+	output := processOutput{Stdout: stdout}
+	err = parseOutput(&output, runner.engine)
+	for _, warning := range output.Warnings {
+		log.Warn("ask.output.partial", "reason", name+": "+warning)
+	}
+	if err != nil {
 		return AskResult{}, fmt.Errorf("%s ask failed: %w", name, err)
 	}
 	return AskResult{Answer: output.Answer, Usage: output.Usage, Duration: clock.Real.Now().Sub(started)}, nil
@@ -124,6 +152,7 @@ type processOutput struct {
 	Stdout, Answer string
 	Usage          *TokenUsage
 	IsError        bool
+	Warnings       []string // what the parse could not read and skipped, the answer kept
 }
 
 func boundedTail(value string, limit int) string {
@@ -174,21 +203,37 @@ func runProcess(ctx context.Context, argv []string, options deps.StartOptions) e
 
 const maxCapturedOutput = 8 << 20
 
-type boundedBuffer struct {
-	bytes.Buffer
-	truncated bool
+// engineStream is one of the engine's standard streams: an unlinked temporary
+// file holding content, which the engine reads or writes directly. Its whole
+// output is on hand the moment it exits: no pipe-copy goroutine that a loaded
+// scheduler leaves unrun past exec's WaitDelay, which closed the pipe on an
+// answer already written, and no pipe a lingering descendant holds open.
+func engineStream(content string) (*os.File, error) {
+	stream, err := os.CreateTemp("", "harvester-ask-")
+	if err != nil {
+		return nil, fmt.Errorf("create an engine stream: %w", err)
+	}
+	if err := os.Remove(stream.Name()); err != nil {
+		return nil, errors.Join(fmt.Errorf("unlink engine stream %s: %w", stream.Name(), err), stream.Close())
+	}
+	if _, err := stream.WriteString(content); err != nil {
+		return nil, errors.Join(fmt.Errorf("write engine stream %s: %w", stream.Name(), err), stream.Close())
+	}
+	if _, err := stream.Seek(0, io.SeekStart); err != nil {
+		return nil, errors.Join(fmt.Errorf("rewind engine stream %s: %w", stream.Name(), err), stream.Close())
+	}
+	return stream, nil
 }
 
-func (buffer *boundedBuffer) Write(value []byte) (int, error) {
-	remaining := maxCapturedOutput - buffer.Len()
-	if remaining <= 0 {
-		buffer.truncated = true
-		return len(value), nil
+// captured is what the engine wrote to stream, its first maxCapturedOutput
+// bytes, and whether it wrote more.
+func captured(stream *os.File) (string, bool, error) {
+	raw, err := io.ReadAll(io.NewSectionReader(stream, 0, maxCapturedOutput+1))
+	if err != nil {
+		return "", false, fmt.Errorf("read engine stream %s: %w", stream.Name(), err)
 	}
-	if len(value) > remaining {
-		_, _ = buffer.Buffer.Write(value[:remaining])
-		buffer.truncated = true
-		return len(value), nil
+	if len(raw) > maxCapturedOutput {
+		return string(raw[:maxCapturedOutput]), true, nil
 	}
-	return buffer.Buffer.Write(value)
+	return string(raw), false, nil
 }

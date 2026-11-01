@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/rezzminator/harvester/internal/obs"
 )
 
 // TestLockProvisionRootSerializesTwoHolders is half of L2-F23: nothing in the
@@ -180,126 +184,250 @@ func TestProvisionBrowserWaitsForTheLock(t *testing.T) {
 // TestProvisionBrowserKeepsCurrentValidWhenTheRebuildDies is the other half of
 // L2-F23: ProvisionBrowser did os.RemoveAll(final) at the path `current`
 // already pointed to, so a crash — or a concurrent fetch — met a
-// half-destroyed environment where a working one used to be.
+// half-destroyed environment where a working one used to be. The root is a
+// link (macOS's /var -> /private/var): a live tree that is itself a staged
+// rebuild is never cleared as an abandoned attempt.
 func TestProvisionBrowserKeepsCurrentValidWhenTheRebuildDies(t *testing.T) {
-	root := t.TempDir()
-	platform := Platform{GOOS: "linux", GOARCH: "amd64"}
-	targets, cache := fakeProvisionInputs(t, root, platform)
-	options := func(run RunFunc, smoke SmokeFunc) ProvisionOptions {
-		return ProvisionOptions{
-			Root: root, Cache: cache, Platform: platform,
-			Download: func(_ context.Context, url, _ string) error {
-				return fmt.Errorf("unit provisioning hit the network (%s)", url)
-			},
-			Run:   run,
-			Smoke: smoke,
-		}
-	}
-	first, err := provisionBrowserWithTargets(
-		context.Background(),
-		options(fakeProvisionRun(t, false), fakeBrowserSmoke()),
-		targets,
-	)
-	if err != nil {
-		t.Fatalf("first browser provisioning failed: %v", err)
-	}
-	current := BrowserRuntimeRoot(root, platform)
-	live, err := filepath.EvalSymlinks(current)
-	if err != nil {
-		t.Fatalf("current pointer does not resolve after the first provision: %v", err)
-	}
-
-	// Second run at the SAME digest — the repair path EnsureBrowser takes when
-	// the live environment stops answering its smoke — and it dies partway
-	// through the rebuild.
-	_, err = provisionBrowserWithTargets(context.Background(), options(
-		func(ctx context.Context, executable string, arguments []string, directory string) ([]byte, error) {
-			if len(arguments) > 0 && arguments[0] == "sync" {
-				return nil, errors.New("uv sync died mid-rebuild")
+	for _, tc := range []struct {
+		name     string
+		rebuilds int
+	}{
+		{name: "the live tree is the digest directory"},
+		{name: "the live tree is a staged rebuild", rebuilds: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "root-link")
+			if err := os.Symlink(t.TempDir(), root); err != nil {
+				t.Fatal(err)
 			}
-			return fakeProvisionRun(t, false)(ctx, executable, arguments, directory)
-		},
-		func(context.Context, Runtime) (map[string]any, error) {
-			return nil, errors.New("the live browser environment stopped answering its smoke")
-		}), targets)
-	if err == nil {
-		t.Fatal("a failed rebuild reported success")
-	}
+			platform := Platform{GOOS: "linux", GOARCH: "amd64"}
+			targets, cache := fakeProvisionInputs(t, root, platform)
+			options := func(run RunFunc, smoke SmokeFunc) ProvisionOptions {
+				return ProvisionOptions{
+					Root: root, Cache: cache, Platform: platform,
+					Download: func(_ context.Context, url, _ string) error {
+						return fmt.Errorf("unit provisioning hit the network (%s)", url)
+					},
+					Run:   run,
+					Smoke: smoke,
+				}
+			}
+			first, err := provisionBrowserWithTargets(
+				context.Background(),
+				options(fakeProvisionRun(t, false), fakeBrowserSmoke()),
+				targets,
+			)
+			if err != nil {
+				t.Fatalf("first browser provisioning failed: %v", err)
+			}
+			current := BrowserRuntimeRoot(root, platform)
+			for range tc.rebuilds {
+				// Break the live tree so the reuse check rebuilds it beside itself.
+				if err := os.Remove(filepath.Join(current, "project", "browser.py")); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := provisionBrowserWithTargets(context.Background(),
+					options(fakeProvisionRun(t, false), fakeBrowserSmoke()), targets); err != nil {
+					t.Fatalf("browser rebuild failed: %v", err)
+				}
+			}
+			live, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				t.Fatalf("current pointer does not resolve after provisioning: %v", err)
+			}
 
-	resolved, err := filepath.EvalSymlinks(current)
-	if err != nil {
-		t.Fatalf("current pointer dangles after a failed rebuild: %v", err)
-	}
-	if resolved != live {
-		t.Fatalf("current moved off the working environment during a failed rebuild: %s, was %s", resolved, live)
-	}
-	for _, relative := range []string{"environment.json", filepath.Join("project", "browser.py")} {
-		if _, statErr := os.Stat(filepath.Join(current, relative)); statErr != nil {
-			t.Fatalf("a failed rebuild destroyed the live environment's %s: %v", relative, statErr)
-		}
-	}
-	if digest, inspectErr := InspectBrowser(root, platform); inspectErr != nil || digest.Digest != first.Digest {
-		t.Fatalf("InspectBrowser after a failed rebuild = %v (digest %q, want %q)",
-			inspectErr, digest.Digest, first.Digest)
+			// Another run at the SAME digest — the repair path EnsureBrowser takes when
+			// the live environment stops answering its smoke — and it dies partway
+			// through the rebuild.
+			_, err = provisionBrowserWithTargets(context.Background(), options(
+				func(ctx context.Context, executable string, arguments []string, directory string) ([]byte, error) {
+					if len(arguments) > 0 && arguments[0] == "sync" {
+						return nil, errors.New("uv sync died mid-rebuild")
+					}
+					return fakeProvisionRun(t, false)(ctx, executable, arguments, directory)
+				},
+				func(context.Context, Runtime) (map[string]any, error) {
+					return nil, errors.New("the live browser environment stopped answering its smoke")
+				}), targets)
+			if err == nil {
+				t.Fatal("a failed rebuild reported success")
+			}
+
+			resolved, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				t.Fatalf("current pointer dangles after a failed rebuild: %v", err)
+			}
+			if resolved != live {
+				t.Fatalf("current moved off the working environment during a failed rebuild: %s, was %s", resolved, live)
+			}
+			for _, relative := range []string{"environment.json", filepath.Join("project", "browser.py")} {
+				if _, statErr := os.Stat(filepath.Join(current, relative)); statErr != nil {
+					t.Fatalf("a failed rebuild destroyed the live environment's %s: %v", relative, statErr)
+				}
+			}
+			if digest, inspectErr := InspectBrowser(root, platform); inspectErr != nil || digest.Digest != first.Digest {
+				t.Fatalf("InspectBrowser after a failed rebuild = %v (digest %q, want %q)",
+					inspectErr, digest.Digest, first.Digest)
+			}
+		})
 	}
 }
 
-// TestProvisionBrowserRebuildSwapsAndClearsTheReplacedTree: a SUCCESSFUL
-// same-digest rebuild leaves exactly one environment behind, not two.
-func TestProvisionBrowserRebuildSwapsAndClearsTheReplacedTree(t *testing.T) {
-	root := t.TempDir()
-	platform := Platform{GOOS: "linux", GOARCH: "amd64"}
-	targets, cache := fakeProvisionInputs(t, root, platform)
-	build := func() (ProvisionResult, error) {
-		return provisionBrowserWithTargets(context.Background(), ProvisionOptions{
-			Root: root, Cache: cache, Platform: platform,
-			Download: func(_ context.Context, url, _ string) error {
-				return fmt.Errorf("unit provisioning hit the network (%s)", url)
-			},
-			Run: fakeProvisionRun(t, false),
-			// A smoke that always refuses forces the reuse check to rebuild.
-			Smoke: func(_ context.Context, runtime Runtime) (map[string]any, error) {
-				if _, statErr := os.Stat(runtime.Script); statErr != nil {
-					return nil, statErr
+// TestProvisionBrowserRebuildSwapsOutTheReplacedTree: a rebuild of the live
+// digest moves current to the new tree, then clears the replaced one; a
+// replaced tree that cannot be removed is logged and left for the next
+// rebuild, never the live environment's failure.
+func TestProvisionBrowserRebuildSwapsOutTheReplacedTree(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		failRemove   bool
+		environments int
+	}{
+		{name: "the replaced tree is cleared", environments: 1},
+		{name: "a replaced tree that cannot be removed stays", failRemove: true, environments: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, recorder := obs.Test(t)
+			root := t.TempDir()
+			platform := Platform{GOOS: "linux", GOARCH: "amd64"}
+			targets, cache := fakeProvisionInputs(t, root, platform)
+			build := func() (ProvisionResult, error) {
+				return provisionBrowserWithTargets(ctx, ProvisionOptions{
+					Root: root, Cache: cache, Platform: platform,
+					Download: func(_ context.Context, url, _ string) error {
+						return fmt.Errorf("unit provisioning hit the network (%s)", url)
+					},
+					Run: fakeProvisionRun(t, false),
+					// A smoke that always refuses forces the reuse check to rebuild.
+					Smoke: func(_ context.Context, runtime Runtime) (map[string]any, error) {
+						if _, statErr := os.Stat(runtime.Script); statErr != nil {
+							return nil, statErr
+						}
+						return map[string]any{"ok": true, "patchright": true, "chrome_path": "/usr/bin/google-chrome"}, nil
+					},
+				}, targets)
+			}
+			if _, err := build(); err != nil {
+				t.Fatalf("first browser provisioning failed: %v", err)
+			}
+			envRoot := filepath.Join(root, "env-browser", platform.String())
+			live, err := filepath.EvalSymlinks(BrowserRuntimeRoot(root, platform))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Break the live tree so the reuse check cannot short-circuit.
+			if err := os.Remove(filepath.Join(live, "project", "browser.py")); err != nil {
+				t.Fatal(err)
+			}
+			if tc.failRemove {
+				restore := pruneRemoveAll
+				pruneRemoveAll = func(path string) error {
+					if path == live {
+						return errors.New("permission denied")
+					}
+					return os.RemoveAll(path)
 				}
-				return map[string]any{"ok": true, "patchright": true, "chrome_path": "/usr/bin/google-chrome"}, nil
+				t.Cleanup(func() { pruneRemoveAll = restore })
+			}
+			if _, err := build(); err != nil {
+				t.Fatalf("rebuild failed: %v", err)
+			}
+			resolved, err := filepath.EvalSymlinks(BrowserRuntimeRoot(root, platform))
+			if err != nil {
+				t.Fatalf("current pointer dangles after a rebuild: %v", err)
+			}
+			if _, statErr := os.Stat(filepath.Join(resolved, "project", "browser.py")); statErr != nil {
+				t.Fatalf("the rebuilt environment is missing its worker: %v", statErr)
+			}
+			entries, err := os.ReadDir(envRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			environments := 0
+			for _, entry := range entries {
+				if entry.IsDir() {
+					environments++
+				}
+			}
+			if environments != tc.environments {
+				t.Fatalf("environment directories after a rebuild = %d, want %d: %v", environments, tc.environments, entries)
+			}
+			var leftovers []string
+			for _, record := range recorder.Records() {
+				if record.Message == "harvestpy.browser.leftover" {
+					path, _ := record.Field("path")
+					cause, _ := record.Field(obs.FieldErr)
+					leftovers = append(leftovers, fmt.Sprintf("%s %v: %v", record.Level, path, cause))
+				}
+			}
+			var want []string
+			if tc.failRemove {
+				want = []string{fmt.Sprintf("%s %s: permission denied", slog.LevelWarn, live)}
+			}
+			if !slices.Equal(leftovers, want) {
+				t.Fatalf("leftover records = %q, want %q", leftovers, want)
+			}
+		})
+	}
+}
+
+// TestConvergeKeepsItsResultWhenTheLockReleaseFails: the environment is
+// published before the lock drops, so a failed unlock or close is logged and
+// the converge still answers with the environment it made.
+func TestConvergeKeepsItsResultWhenTheLockReleaseFails(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		converge func(context.Context, ProvisionOptions, map[Platform]Target) (ProvisionResult, error)
+		smoke    SmokeFunc
+		current  func(root string, platform Platform) string
+	}{
+		{
+			name: "conversion", converge: provisionWithTargets, current: RuntimeRoot,
+			smoke: func(context.Context, Runtime) (map[string]any, error) {
+				return map[string]any{"imports": map[string]any{}, "conversion": map[string]any{"ok": true}}, nil
 			},
-		}, targets)
-	}
-	if _, err := build(); err != nil {
-		t.Fatalf("first browser provisioning failed: %v", err)
-	}
-	envRoot := filepath.Join(root, "env-browser", platform.String())
-	live, err := filepath.EvalSymlinks(BrowserRuntimeRoot(root, platform))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Break the live tree so the reuse check cannot short-circuit.
-	if err := os.Remove(filepath.Join(live, "project", "browser.py")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := build(); err != nil {
-		t.Fatalf("rebuild failed: %v", err)
-	}
-	resolved, err := filepath.EvalSymlinks(BrowserRuntimeRoot(root, platform))
-	if err != nil {
-		t.Fatalf("current pointer dangles after a rebuild: %v", err)
-	}
-	if _, statErr := os.Stat(filepath.Join(resolved, "project", "browser.py")); statErr != nil {
-		t.Fatalf("the rebuilt environment is missing its worker: %v", statErr)
-	}
-	entries, err := os.ReadDir(envRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	environments := 0
-	for _, entry := range entries {
-		if entry.IsDir() {
-			environments++
-		}
-	}
-	if environments != 1 {
-		t.Fatalf("environment directories after a rebuild = %d, want 1: %v", environments, entries)
+		},
+		{name: "browser", converge: provisionBrowserWithTargets, smoke: fakeBrowserSmoke(), current: BrowserRuntimeRoot},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			restore := provisionLock
+			provisionLock = func(ctx context.Context, root string) (func() error, error) {
+				release, err := lockProvisionRoot(ctx, root)
+				return func() error {
+					return errors.Join(release(), errors.New("close harvestpy provision lock: input/output error"))
+				}, err
+			}
+			t.Cleanup(func() { provisionLock = restore })
+			ctx, recorder := obs.Test(t)
+			root := t.TempDir()
+			platform := Platform{GOOS: "linux", GOARCH: "amd64"}
+			targets, cache := fakeProvisionInputs(t, root, platform)
+			result, err := tc.converge(ctx, ProvisionOptions{
+				Root: root, Cache: cache, Platform: platform, ProcRoot: t.TempDir(),
+				Download: func(_ context.Context, url, _ string) error {
+					return fmt.Errorf("unit provisioning hit the network (%s)", url)
+				},
+				Run: fakeProvisionRun(t, false), Smoke: tc.smoke,
+			}, targets)
+			if err != nil {
+				t.Fatalf("converge with a failing lock release: %v", err)
+			}
+			digest, err := ReadEnvironmentDigest(filepath.Join(tc.current(root, platform), "environment.json"))
+			if err != nil || digest.Digest != result.Digest || digest.State != provisionStateReady {
+				t.Fatalf("live environment = %+v, %v; want %s ready", digest, err, result.Digest)
+			}
+			var unlocks []string
+			for _, record := range recorder.Records() {
+				if record.Message == "harvestpy.provision.unlock" {
+					cause, _ := record.Field(obs.FieldErr)
+					unlocks = append(unlocks, fmt.Sprintf("%s %v", record.Level, cause))
+				}
+			}
+			want := []string{slog.LevelWarn.String() + " close harvestpy provision lock: input/output error"}
+			if !slices.Equal(unlocks, want) {
+				t.Fatalf("unlock records = %q, want %q", unlocks, want)
+			}
+		})
 	}
 }
 

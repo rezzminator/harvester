@@ -184,10 +184,7 @@ func (h *Harvester) storeThinCopy(
 	}
 	reason := "the open-access copy at " + webOrigin(thin.url) + " carries no full text (" + thin.measure +
 		"), and no other candidate carried full text"
-	if prior := partialReason(content); prior != "" {
-		reason, content = prior+"; "+reason, partialBody(content)
-	}
-	result.Content, result.Path = withPartial(content, reason), ""
+	result.Content, result.Path = withMorePartial(content, reason), ""
 	noteServed(ctx, thin.url)
 	return h.storeResultAlias(source, canonical, result, thin.trace, options)
 }

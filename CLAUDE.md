@@ -20,7 +20,7 @@ Cached handles and external gateway credentials outlive one process: migration c
 - plugin: the installable manifest, launcher and release checksums · `plugins/harvester/`
 - launcher: installs a checksum-verified versioned binary under `${HARVESTER_HOME:-$HOME/.local/share/harvester}` and maintains `{HARVESTER_HOME}/bin/harvester` · `plugins/harvester/libexec/harvester`
 - release: version and checksum gates, reproducible assets · `scripts/release-check.sh`, `scripts/build-release.sh`
-- CI: the pull-request checks and the publish on merge · `.github/workflows/release.yml`
+- CI: the pull-request checks and the publish on merge · `.github/workflows/ci.yml`, `.github/workflows/publish.yml`
 - testing manual: isolation and validation commands · `docs/testing.md`
 
 # Runtime
@@ -33,17 +33,17 @@ Cached handles and external gateway credentials outlive one process: migration c
 - `harvester status [--json]` reports pid, version, uptime, endpoint and gateway state; `harvester stop` drains daemon.
 - Release inputs: `scripts/release-check.sh`; checksum reproduction: `scripts/release-check.sh --release`.
 - Build assets and refresh the launcher's checksum manifest: `scripts/build-release.sh --write-sums`.
-- Release check: `make release-check`, after `git fetch origin main`, runs every check the release pull request runs: `make check`, `make leak`, `make release`; `make release` fails on `develop` between releases by design (version not past main's).
+- Release check: `make release-check`, after `git fetch origin main`, runs every check the release pull request runs: `make check` (the leak gate last), `make release`; `make release` fails on `develop` between releases by design (version not past main's).
 - Scratch: `/tmp/harvester/{purpose}/`.
 
 ## CI
 
-- `.github/workflows/release.yml` on every pull request to `main`, never on a push: `check` (format, build, vet, tests, races, the OpenCode hook test, `scripts/release-check.sh`, the leak gate) and `release` (the version moved past main's, `scripts/release-check.sh --release`), each a `make` target; merging it runs `publish`, which tags `v{version}` and publishes.
+- `.github/workflows/ci.yml` on every pull request to `main`, never on a push: `check` (format, build, vet, tests, races, the OpenCode hook test, `scripts/release-check.sh`, the leak gate) on Linux and macOS and `release` (the version moved past main's, `scripts/release-check.sh --release`), each a `make` target, and `ci`, green only when every one succeeded; merging it runs `.github/workflows/publish.yml`: `publish` tags `v{version}` and publishes, then `verify` checks the published assets.
 
 ## Git
 
 - Work lands on `develop`; `develop` is protected by the ruleset `develop keeps its history`: never force-push or delete it.
-- `main` is protected by `main is release-only`: it moves only by merging the `develop` -> `main` pull request with a merge commit, after `check` and `release` pass; never a direct push, never an admin override.
+- `main` is protected by `main is release-only`: it moves only by merging the `develop` -> `main` pull request with a merge commit, after `ci` passes; never a direct push, never an admin override.
 - Every pull request merged into `main` publishes: its version moves past main's, and a pre-release version (`-dev.N`) is bumped to the real release version in that pull request.
 - Before opening it: `git fetch origin main`, then `make release-check` passes.
 - After the merge, the `publish` job tags `v{version}` on the merge commit and creates the GitHub release; nobody pushes a tag by hand.

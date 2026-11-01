@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,11 +41,11 @@ func realPythonConverter(t *testing.T) *Converter {
 // absence, with the stderr tail dropped on the floor.
 func TestConverterExceptionIsAFailureNotAnEmptyConversion(t *testing.T) {
 	converter := realPythonConverter(t)
-	document := filepath.Join(t.TempDir(), "paper.zzz")
-	if err := os.WriteFile(document, []byte("body"), 0o600); err != nil {
+	document := filepath.Join(t.TempDir(), "page.webarchive")
+	if err := os.WriteFile(document, []byte(`<?xml version="1.0"?><plist version="1.0"><dict/></plist>`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := converter.Convert(context.Background(), Request{Path: document, Kind: "zzz"})
+	_, err := converter.Convert(context.Background(), Request{Path: document, Kind: "webarchive"})
 	if err == nil {
 		t.Fatal("a raising conversion returned no error")
 	}
@@ -91,14 +92,23 @@ func TestConverterFailureCarriesTheBasenameNotTheFullPath(t *testing.T) {
 // a document that genuinely converts to nothing must NOT be reported as a
 // crash. The worker here is a fake speaking the pipe protocol, so the outcome
 // is the Go mapping alone.
+// What the converter read about the blank document (its meta) stays on the
+// result and in the error a caller reads.
 func TestConverterEmptyDocumentStaysADistinctOutcome(t *testing.T) {
-	converter := fakeLineConverter(t, `{"ok":true,"markdown":"","kind":"html"}`)
-	_, err := converter.Convert(context.Background(), Request{Path: "doc.html", Kind: "html"})
+	converter := fakeLineConverter(t, `{"ok":true,"markdown":"","meta":{"title":"Quarterly Report","author":"A. Writer"}}`)
+	result, err := converter.Convert(context.Background(), Request{Path: "doc.html", Kind: "html"})
 	if !errors.Is(err, ErrConverterEmpty) {
 		t.Fatalf("Convert() error = %v, want ErrConverterEmpty", err)
 	}
 	if errors.Is(err, ErrConverterFailed) {
 		t.Fatalf("an empty document was reported as a converter failure: %v", err)
+	}
+	const want = `harvestpy worker returned empty markdown (EMPTY-text conversion); the converter read author "A. Writer", title "Quarterly Report"`
+	if err.Error() != want {
+		t.Fatalf("Convert() error = %q, want %q", err.Error(), want)
+	}
+	if wantMeta := map[string]string{"title": "Quarterly Report", "author": "A. Writer"}; !maps.Equal(result.Meta, wantMeta) {
+		t.Fatalf("Convert() meta = %v, want %v", result.Meta, wantMeta)
 	}
 }
 

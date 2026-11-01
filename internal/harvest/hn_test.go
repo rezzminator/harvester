@@ -212,6 +212,25 @@ func TestHNMorePagesAreFollowedAndMerged(t *testing.T) {
 	}
 }
 
+// TestHNMergedCommentWithNoIdIsKept: a comment row of a later page that
+// carries no id is merged in like the rest, and renders under an unknown id
+// with no permalink.
+func TestHNMergedCommentWithNoIdIsKept(t *testing.T) {
+	t.Parallel()
+	page := hnFixture(t)
+	first, second := hnSplit(page, 30)
+	ids, _ := hnFixtureRows(page)
+	site := &hnSite{pages: []string{first, strings.Replace(second, ` id="`+ids[30]+`"`, ``, 1)}}
+	h, _ := site.harvester(t)
+	result := h.FetchWithOptions(context.Background(), hnThreadURL, FetchOptions{Refresh: true})
+	if result.Error != "" || result.Partial != "" || !strings.Contains(result.Content, "**Comments:** 53 stated · 53 loaded (") {
+		t.Fatalf("the thread is not complete: partial=%q error=%q\n%.800s", result.Partial, result.Error, result.Content)
+	}
+	if got := len(regexp.MustCompile(`(?m)^ *- \*\*[^*]+\*\* · .* · #unknown id\b`).FindAllString(result.Content, -1)); got != 1 {
+		t.Fatalf("%d comments render under an unknown id, want 1\n%.2500s", got, result.Content)
+	}
+}
+
 // TestHNUnloadedCommentsFlagThePartial: whatever the page advertises and the
 // artifact does not hold is named and flags it partial — a "More" page that
 // failed, one answered by another item's page, one whose address does not

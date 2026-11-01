@@ -143,11 +143,8 @@ func AskOver(
 	files := make([]string, 0, len(sources))
 	receiptDir := ""
 	cleanup := func(err error) error {
-		if receiptDir == "" {
-			return err
-		}
-		if cleanupErr := os.RemoveAll(receiptDir); cleanupErr != nil {
-			return errors.Join(err, fmt.Errorf("cleanup receipts %s: %w", receiptDir, cleanupErr))
+		if receiptDir != "" {
+			removeScratch(ctx, "ask receipts", receiptDir)
 		}
 		return err
 	}

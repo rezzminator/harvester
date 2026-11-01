@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -309,13 +310,23 @@ func TestGatewayServiceUsesTheInvokedExecutable(t *testing.T) {
 func TestGatewayServiceUsesPluginStableLink(t *testing.T) {
 	if stable := os.Getenv("HARVESTER_SERVICE_BINARY_HELPER"); stable != "" {
 		cfg := config.Runtime{Paths: paths.Values{Home: t.TempDir()}, Config: config.Config{Harvester: config.DefaultHarvester()}}
+		// The service names the stable link through the directory the OS reports for the running
+		// executable: canonical on Linux (/proc/self/exe), as invoked on macOS.
+		canonicalDir, err := filepath.EvalSymlinks(filepath.Dir(stable))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(canonicalDir, filepath.Base(stable))
+		if runtime.GOOS == "darwin" {
+			want = stable
+		}
 		for _, goos := range []string{"linux", "darwin"} {
 			_, body, err := serviceContent(cfg, goos)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(body), stable) {
-				t.Fatalf("%s service must follow the native plugin stable link %s: %s", goos, stable, body)
+			if !strings.Contains(string(body), want) {
+				t.Fatalf("%s service must follow the native plugin stable link %s: %s", goos, want, body)
 			}
 		}
 		return

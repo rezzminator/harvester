@@ -115,6 +115,8 @@ type lemmyPage struct {
 	pages  map[int][]lemmyCommentView
 	// dropped holds the keys of loaders dropped without an answer kept.
 	dropped map[string]bool
+	// undecoded counts the kept answers that no longer decode.
+	undecoded int
 }
 
 func lemmyPageOf(page *url.URL) (lemmyPage, bool) {
@@ -159,6 +161,7 @@ func lemmyStateOf(doc *html.Node, page *url.URL) (lemmyPage, bool) {
 		if err != nil {
 			obs.Logger(context.Background()).Warn("harvest: a kept Lemmy answer no longer decodes; left out",
 				"kind", nodeAttr(node, "kind"), obs.FieldErr, err.Error())
+			state.undecoded++
 		}
 	}
 	return state, true
@@ -231,8 +234,6 @@ func (state lemmyPage) check(kind, label string, body []byte, contentType string
 			return notJSON
 		case post.PostView.Post.ID != state.id:
 			return fmt.Errorf("answered by the record of post %d, not %d", post.PostView.Post.ID, state.id)
-		case post.PostView.Counts.Comments == nil:
-			return fmt.Errorf("answered by a record of post %d stating no comment count", state.id)
 		}
 		return nil
 	}
@@ -241,7 +242,7 @@ func (state lemmyPage) check(kind, label string, body []byte, contentType string
 		return notJSON
 	}
 	for index := range answer.Comments {
-		if comment := answer.Comments[index].Comment; comment.ID == 0 || comment.PostID != state.id {
+		if comment := answer.Comments[index].Comment; comment.PostID != state.id {
 			return fmt.Errorf("answered by a list holding a comment (%d) of another post", comment.ID)
 		}
 	}
@@ -266,9 +267,14 @@ func extractLemmyPost(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 	if !ok {
 		return siteExtraction{}, false
 	}
+	gap := keptAnswerGap("Lemmy", state.undecoded)
 	if state.post == nil {
-		return siteExtraction{unrendered: "lemmy post: the post's API record was not loaded " +
-			"(its comments not read from the API; the page is stored as the instance served it)"}, false
+		unrendered := "lemmy post: the post's API record was not loaded " +
+			"(its comments not read from the API; the page is stored as the instance served it)"
+		if gap != "" {
+			unrendered += "; " + gap
+		}
+		return siteExtraction{unrendered: unrendered}, false
 	}
 	view := state.post.PostView
 	postID := "post " + strconv.FormatInt(state.id, 10)
@@ -288,14 +294,21 @@ func extractLemmyPost(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 		title: view.Post.Name,
 		post: socialPost{
 			id: postID, author: lemmyAuthor(view.Creator), posted: githubPosted(view.Post.Published),
-			link: link, body: strings.Join(body, "\n\n"), stated: *view.Counts.Comments,
+			link: link, body: strings.Join(body, "\n\n"),
 		},
+		statedUnknown: view.Counts.Comments == nil,
 		notServed: "the instance's comment list did not hold them (a comment of a remote instance it has " +
 			"not received, or a count not yet updated)",
 		unavailableUnstated: true,
 	}
+	if view.Counts.Comments != nil {
+		thread.post.stated = *view.Counts.Comments
+	}
 	if community := view.Community.Name; community != "" {
 		thread.title += " (" + lemmyAuthor(view.Community)[1:] + ")"
+	}
+	if gap != "" {
+		thread.gaps = append(thread.gaps, gap)
 	}
 	seen := map[int64]bool{}
 	for number := 1; ; number++ {
@@ -310,10 +323,13 @@ func extractLemmyPost(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 		thread.repliesRead = true
 		for index := range comments {
 			entry := &comments[index]
-			if seen[entry.Comment.ID] {
-				continue
+			// A comment served with id 0 has no identity to deduplicate by.
+			if entry.Comment.ID != 0 {
+				if seen[entry.Comment.ID] {
+					continue
+				}
+				seen[entry.Comment.ID] = true
 			}
-			seen[entry.Comment.ID] = true
 			thread.replies = append(thread.replies, lemmyPost(entry, postID))
 		}
 		if len(comments) < lemmyPerPage {

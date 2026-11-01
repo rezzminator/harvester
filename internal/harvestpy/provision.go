@@ -186,15 +186,11 @@ func provisionWithTargets(
 	// one of them reads a tree the other is halfway through replacing —
 	// ProvisionBrowser's own lock (provision_browser.go) guards its sibling
 	// root the same way.
-	release, err := lockProvisionRoot(ctx, envRoot)
+	release, err := provisionLock(ctx, envRoot)
 	if err != nil {
 		return ProvisionResult{}, err
 	}
-	defer func() {
-		if releaseErr := release(); releaseErr != nil {
-			returnErr = errors.Join(returnErr, releaseErr)
-		}
-	}()
+	defer releaseProvisionRoot(ctx, release)
 	if existing, err := ReadEnvironmentDigest(
 		filepath.Join(current, "environment.json"),
 	); err == nil && existing.Digest == desired &&
@@ -374,11 +370,10 @@ func provisionWithTargets(
 	if err := atomicCurrentWithClock(envRoot, desired, options.Clock); err != nil {
 		return ProvisionResult{}, err
 	}
-	if backup != "" {
-		if err := os.RemoveAll(backup); err != nil {
-			return ProvisionResult{}, fmt.Errorf("remove quarantined harvestpy environment: %w", err)
-		}
-	}
+	// Published: the restore must never run now, since staging is the live
+	// tree. The quarantined backup is a superseded env the prune below removes,
+	// unless it cannot prove no process runs from it (liveness unreadable, or a
+	// pid running from it): then it is kept, and Pruned names why.
 	finished = true
 	return ProvisionResult{Digest: desired, Environment: base, Runtime: Runtime{
 		Python: filepath.Join(current, "project", ".venv", "bin", "python"),
@@ -543,8 +538,11 @@ func downloadAttempt(ctx, bounded context.Context, url, path string, expectedSiz
 		return fmt.Errorf("download request: %w", downloadTimeoutError(ctx, bounded, err))
 	}
 	defer func() {
+		// The bytes are already copied and size-checked, and the caller's
+		// SHA-256 judges them: a close error costs the connection, never the file.
 		if err := response.Body.Close(); err != nil {
-			returnErr = errors.Join(returnErr, fmt.Errorf("close download response: %w", err))
+			obs.Logger(obs.Component(ctx, "harvestpy")).Warn("harvestpy.download.close",
+				"path", request.URL.Path, obs.FieldErr, err.Error())
 		}
 	}()
 	if response.StatusCode/100 != 2 {

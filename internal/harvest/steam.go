@@ -72,6 +72,10 @@ type steamPage struct {
 	id      string
 	pages   []steamAnswer
 	dropped bool
+	// next is the number of the page a loader asks for, past the pages kept and skipped.
+	next int
+	// skipped counts the kept pages that no longer decode or are out of order.
+	skipped int
 }
 
 // isSteamApp accepts a store address naming an app.
@@ -87,7 +91,7 @@ func steamPageOf(doc *html.Node, page *url.URL) (steamPage, bool) {
 		return steamPage{}, false
 	}
 	state := steamPage{id: match[1]}
-	state.pages, state.dropped = keptPages[steamAnswer](doc, steamAnswerTag, "Steam")
+	state.pages, state.next, state.skipped, state.dropped = keptPages[steamAnswer](doc, steamAnswerTag, "Steam")
 	return state, true
 }
 
@@ -97,10 +101,10 @@ func steamPageOf(doc *html.Node, page *url.URL) (steamPage, bool) {
 func (state *steamPage) more() bool {
 	count := len(state.pages)
 	switch {
+	case state.next >= steamReviewPages:
+		return false
 	case count == 0:
 		return true
-	case count >= steamReviewPages:
-		return false
 	}
 	last := &state.pages[count-1]
 	if len(*last.Reviews) == 0 || last.Cursor == "" ||
@@ -111,7 +115,19 @@ func (state *steamPage) more() bool {
 	for index := range state.pages {
 		loaded += len(*state.pages[index].Reviews)
 	}
-	return loaded < *state.pages[0].Summary.Total
+	total := state.total()
+	return total == nil || loaded < *total
+}
+
+// total is the review total the first kept page states; nil when the page
+// stating it (the first, which only it states) is not among the kept ones.
+func (state *steamPage) total() *int {
+	for index := range state.pages {
+		if state.pages[index].Summary.Total != nil {
+			return state.pages[index].Summary.Total
+		}
+	}
+	return nil
 }
 
 // steamLoaders names the next review page while the page lacks it.
@@ -120,10 +136,10 @@ func steamLoaders(doc *html.Node, page *url.URL) []pageLoader {
 	if !ok || state.dropped || !state.more() {
 		return nil
 	}
-	number := len(state.pages)
+	number := state.next
 	cursor := "*"
-	if number > 0 {
-		cursor = state.pages[number-1].Cursor
+	if len(state.pages) > 0 {
+		cursor = state.pages[len(state.pages)-1].Cursor
 	}
 	query := url.Values{
 		"json": {"1"}, "filter": {"recent"}, "language": {"all"}, "purchase_type": {"all"},
@@ -151,8 +167,8 @@ func steamLoaders(doc *html.Node, page *url.URL) []pageLoader {
 }
 
 // checkSteam proves an answer is a page of the review API: success 1, a
-// review list whose every review has an id, and — on the first page — the
-// app's stated total.
+// review list and — on the first page — the app's stated total; a review with
+// no id is kept (the id only dedups).
 func checkSteam(body []byte, contentType string, first bool) error {
 	var answer steamAnswer
 	if err := json.Unmarshal(body, &answer); err != nil || answer.Success != 1 || answer.Reviews == nil {
@@ -161,11 +177,6 @@ func checkSteam(body []byte, contentType string, first bool) error {
 	}
 	if first && answer.Summary.Total == nil {
 		return fmt.Errorf("answered by a first review page that states no total")
-	}
-	for index := range *answer.Reviews {
-		if (*answer.Reviews)[index].ID == "" {
-			return fmt.Errorf("answered by a review page holding a review with no id")
-		}
 	}
 	return nil
 }
@@ -202,7 +213,7 @@ func steamPosts(state *steamPage, parent string) []socialPost {
 	seen := map[string]bool{}
 	for index := range state.pages {
 		for _, review := range *state.pages[index].Reviews {
-			if seen[review.ID] {
+			if review.ID != "" && seen[review.ID] {
 				continue
 			}
 			seen[review.ID] = true
@@ -220,6 +231,9 @@ func steamPosts(state *steamPage, parent string) []socialPost {
 			}
 			if review.Author.PersonaName != "" {
 				post.author = review.Author.PersonaName
+			}
+			if review.ID == "" {
+				post.id = unknownReviewID
 			}
 			out = append(out, post)
 		}
@@ -243,17 +257,19 @@ func extractSteamApp(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 		return siteExtraction{}, false
 	}
 	read := len(state.pages) > 0
-	stated := 0
-	if read {
-		stated = *state.pages[0].Summary.Total
-	} else if node := firstWithAttr(doc, "itemprop", "reviewCount", nil); node != nil && node.DataAtom == atom.Meta {
+	// The count is unstated unless the API's total, or (unread) the page's own, gives a number.
+	stated, statedUnknown := 0, true
+	if total := state.total(); total != nil {
+		stated, statedUnknown = *total, false
+	} else if node := firstWithAttr(doc, "itemprop", "reviewCount", nil); !read && node != nil &&
+		node.DataAtom == atom.Meta {
 		// Unread, the stated count is the page's own (its language's reviews).
-		count, err := strconv.Atoi(nodeAttr(node, "content"))
-		if err != nil {
+		if count, err := strconv.Atoi(nodeAttr(node, "content")); err != nil {
 			obs.Logger(context.Background()).Warn("harvest: a Steam page's review count is not a number",
 				obs.FieldErr, err.Error())
+		} else {
+			stated, statedUnknown = count, false
 		}
-		stated = count
 	}
 	thread := socialThread{
 		kind:  "steam app",
@@ -262,7 +278,8 @@ func extractSteamApp(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 			id: state.id, author: unknownAuthor, posted: unknownPosted,
 			link: "https://" + steamHost + page.Path, stated: stated,
 		},
-		repliesRead: read,
+		repliesRead:   read,
+		statedUnknown: statedUnknown,
 		notServed: fmt.Sprintf("the harvester reads the most recent %d reviews (%d pages of the store's review "+
 			"API); the rest were not requested", steamReviewPages*steamPageSize, steamReviewPages),
 	}
@@ -278,6 +295,9 @@ func extractSteamApp(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 	}
 	if state.dropped && read && state.more() {
 		thread.gaps = append(thread.gaps, "a further review page failed to load")
+	}
+	if gap := keptAnswerGap("Steam", state.skipped); gap != "" {
+		thread.gaps = append(thread.gaps, gap)
 	}
 	if read {
 		thread.replies = steamPosts(&state, state.id)

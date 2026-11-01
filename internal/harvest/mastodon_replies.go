@@ -96,6 +96,8 @@ type mastodonTree struct {
 	byID     map[string]*mastodonStatus
 	byURI    map[string]bool
 	children map[string]int
+	// unparented counts the replies served without a parent id, kept under the page's status.
+	unparented int
 }
 
 func (state mastodonPage) tree() mastodonTree {
@@ -106,12 +108,17 @@ func (state mastodonPage) tree() mastodonTree {
 	}
 	for index := range state.found {
 		status := &state.found[index]
-		if tree.byID[status.ID] != nil || status.InReplyToID == nil {
+		if tree.byID[status.ID] != nil {
 			continue
 		}
 		tree.byID[status.ID] = status
 		tree.byURI[status.URI] = true
 		tree.replies = append(tree.replies, status)
+		if status.InReplyToID == nil {
+			tree.children[state.id]++
+			tree.unparented++
+			continue
+		}
 		tree.children[*status.InReplyToID]++
 	}
 	return tree

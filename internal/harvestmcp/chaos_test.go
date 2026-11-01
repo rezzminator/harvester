@@ -437,10 +437,11 @@ func (rig *serviceChaosRig) checkCall(call *serviceChaosCall) {
 			slices.Sort(read)
 			if !slices.Equal(markersIn(answer), slices.Compact(read)) {
 				rig.errorf(
-					"%s answer read markers %v; want exactly the call's read items %v",
+					"%s answer read markers %v; want exactly the call's read items %v:\n%s",
 					label,
 					markersIn(answer),
 					read,
+					answer,
 				)
 			}
 		}

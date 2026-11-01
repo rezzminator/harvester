@@ -116,8 +116,12 @@ func run(ctx context.Context, cfg config.Runtime, offline bool, stdout io.Writer
 	report, checkErr := ops.check(ctx, root, platform)
 	if checkErr != nil || !report.Healthy {
 		fmt.Fprintf(stdout, "setup: conversion requires provisioning healthy=%t check=%v\n", report.Healthy, checkErr)
-		if _, err := ops.provision(ctx, harvestpy.ProvisionOptions{Root: root, Cache: filepath.Join(root, "cache"), Platform: platform, Offline: offline}); err != nil {
+		provisioned, err := ops.provision(ctx, harvestpy.ProvisionOptions{Root: root, Cache: filepath.Join(root, "cache"), Platform: platform, Offline: offline})
+		if err != nil {
 			return fmt.Errorf("provision conversion (offline=%t): %w", offline, err)
+		}
+		for _, failed := range provisioned.Pruned.Failed {
+			fmt.Fprintf(stdout, "setup: warning: superseded environment not pruned path=%s err=%v\n", failed.Path, failed.Err)
 		}
 	}
 	if _, err := ops.models(ctx, harvestpy.OCRStageOptions{Root: root, Platform: platform, Offline: offline, Announce: func(message string) { fmt.Fprintf(stdout, "setup: OCR %s\n", message) }}); err != nil {

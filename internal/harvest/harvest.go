@@ -56,7 +56,7 @@ func (h *Harvester) fetchUnshared(ctx context.Context, source string, options Fe
 			value := strings.Trim(strings.TrimSpace(source[len("title:"):]), "\"'")
 			result = titleGuessResult(source, value)
 		} else if parsed, parseErr := url.Parse(source); parseErr == nil && parsed.Scheme != "" && parsed.Host != "" {
-			result = h.fetchURL(ctx, source, options)
+			result = h.fetchURL(context.WithValue(ctx, keepThinKey{}, true), source, options)
 		} else {
 			result = titleGuessResult(source, source)
 		}
@@ -163,6 +163,8 @@ func (h *Harvester) fetchURLWithPolicy(
 	if providerResult, handled := h.fetchProviderRecord(ctx, source, options); handled {
 		return providerResult
 	}
+	keepThin, _ := ctx.Value(keepThinKey{}).(bool)
+	ctx = context.WithValue(ctx, keepThinKey{}, false) // a fetch nested in this one finds better or fails
 	// Cache is looked up by the eventual kind for stable type partitioning. A URL
 	// extension gives us an early key; response sniffing may move it to another
 	// partition after the fetch.
@@ -221,7 +223,9 @@ func (h *Harvester) fetchURLWithPolicy(
 	appShellText, _ := ctx.Value(appShellKey{}).(string)
 	appShellInherited := appShellText != ""
 	browserShellRender := false
-	staticConverterOutage := false
+	// A static rung's converter that failed (an outage) or ran and read the
+	// document blank (emptyConversionError): converterNote names each below.
+	var staticConvertErr, emptyConvertErr error
 	// partialPage stores an HTML page an HTTP rung converted but KNOWS is
 	// incomplete (its partial marker) where a render can close a gap. Only a real
 	// browser loads more of the same page, so the ladder goes straight to the
@@ -230,6 +234,11 @@ func (h *Harvester) fetchURLWithPolicy(
 	var partialPage func() Result
 	keptExtractor := ""  // the extractor that claimed partialPage's page
 	var gaps carriedGaps // a site-API gap and the next page; every rung that stores names them (withGaps)
+	// thinPage stores the first page a rung read but would not take as the
+	// answer (a bibliographic landing page, a short page), its partial naming
+	// why: the answer when no rung does better and nothing proved it a wall.
+	var thinPage func() Result
+	thinShort := false // thinPage is a short page, suspect once any rung met a challenge
 	directClient, chromeClient := h.client, h.chrome
 	switch guess {
 	case kindPDF, kindDOCX, kindXLSX, kindPPTX, kindCSV, kindZIP, kindTAR, kind7Z, kindRAR:
@@ -326,8 +335,15 @@ func (h *Harvester) fetchURLWithPolicy(
 		converted, page, err := h.convertFetchedDocument(withBaseURL(ctx, gaps.final), kind, source, body, loaders)
 		gaps = page.carry(gaps)
 		if err != nil {
-			staticConverterOutage = true // named a tool outage by convertOutageNote below (F12)
-			continue
+			if !emptyConversionError(err) {
+				staticConvertErr = err // named a tool outage by converterNote below (F12)
+				continue
+			}
+			emptyConvertErr = err
+			if kind != kindPDF {
+				continue
+			}
+			// A PDF that converted empty is a scan until the OCR rescue below says otherwise.
 		}
 		if kind == kindPDF && strings.TrimSpace(converted) == "" {
 			emptyPDFConvert = true
@@ -356,6 +372,13 @@ func (h *Harvester) fetchURLWithPolicy(
 					}
 				}
 			}
+			if keepThin && thinPage == nil {
+				stored, size, delivered, method := withMorePartial(page.withGaps(converted, gaps, loaders),
+					landingThinGap), int64(len(body)), status, rung.name
+				thinPage = func() Result {
+					return h.storeResult(source, kindHTML, method, stored, size, delivered, rungs, options)
+				}
+			}
 			continue
 		}
 		// The HTML ladder escalates thin extraction results. A short page is
@@ -365,6 +388,15 @@ func (h *Harvester) fetchURLWithPolicy(
 		// nor is a page a per-site extractor recognised (a short thread is
 		// still that site's content, never a shell).
 		if kind == kindHTML && page.extractor == "" && contentChars(partialBody(converted)) < 500 {
+			if keepThin && thinPage == nil {
+				reason := fmt.Sprintf("a short page (%d characters) no other rung read more of: it may be a "+
+					"script shell or a wall", contentChars(partialBody(converted)))
+				stored, size, delivered, method := withMorePartial(page.withGaps(converted, gaps, loaders), reason),
+					int64(len(body)), status, rung.name
+				thinPage, thinShort = func() Result {
+					return h.storeResult(source, kindHTML, method, stored, size, delivered, rungs, options)
+				}, true
+			}
 			continue
 		}
 		// A page a per-site extractor recognised is that site's content by
@@ -408,7 +440,8 @@ func (h *Harvester) fetchURLWithPolicy(
 	browserEmptyRender := false
 	browserUnavailable := ""
 	browserPolicyRefused := false
-	converterOutage := false
+	var browserConvertErr error // the converter's failure on the browser's render, quoted by its note
+	browserAnswerKind := ""     // the kind of the converter's answer to the browser's render
 	tryBrowser := func() (Result, bool) {
 		if !h.settings.browser || isPrivateURL(source) || guess == kindPDF {
 			return Result{}, false
@@ -455,7 +488,16 @@ func (h *Harvester) fetchURLWithPolicy(
 						// The render SUCCEEDED; the conversion step failing is
 						// a tool outage on this server — it must never read as
 						// "the wall won".
-						converterOutage = true
+						// The browser note quotes the converter's failure; converterNote
+						// quotes a render it read as blank, an empty page, never an outage.
+						if emptyConversionError(convErr) {
+							browserEmptyRender = true
+							emptyConvertErr = convErr
+							browserAnswerKind = errorKindEmpty
+						} else {
+							browserConvertErr = convErr
+							browserAnswerKind = errorKindConvert
+						}
 						log.Printf("harvest: browser rung conversion failed for %s: %v", logSource(source), convErr)
 					case sameAsShell(appShellText, converted):
 						// The bundle did not produce route content in a real
@@ -659,6 +701,20 @@ func (h *Harvester) fetchURLWithPolicy(
 			}
 		}
 	}
+	if thinPage != nil && !originGone && !gaps.login && !loaders.loginGateOnly &&
+		(appShellText == "" || appShellInherited) && !(thinShort && lastChallenge) {
+		return thinPage()
+	}
+	// The browser rung's converter answered after a render that was no
+	// challenge: that is the latest evidence, so it replaces the wall (or bare
+	// HTTP status) the static rungs left before the message leads with it, and
+	// the failure is no challenge.
+	if browserAnswerKind != "" {
+		switch lastErrorKind {
+		case "", schemeHTTP, errorKindChallenge, errorKindForbidden:
+			lastErrorKind, lastChallenge = browserAnswerKind, false
+		}
+	}
 	message := FailureMessage(source, lastStatus, lastErrorKind, lastChallenge, h.settings.searchAvailable)
 	if wrongPDF {
 		message = fmt.Sprintf(
@@ -731,12 +787,12 @@ func (h *Harvester) fetchURLWithPolicy(
 			message += " No real-browser bypass was attempted: this server's Patchright + system-Chrome rung is DISABLED (opt-in) — set fetch.browser=true in harvester.config.json to enable it."
 		case browserPolicyRefused:
 			message += browserRefusedNote(lastErrorKind)
-		case converterOutage:
+		case browserConvertErr != nil:
 			message += " The real-browser rung DID run and got real content past the wall, but the conversion step then failed on this server — a tool outage, not proof of IP reputation: " + SearchHint(
 				h.settings.searchAvailable,
 				"retry, or use `search_web` to find an alternative copy.",
 				"retry, or find an alternative copy with search_literature or another URL.",
-			)
+			) + " The converter's error: " + browserConvertErr.Error() + "."
 		case browserUnavailable != "":
 			message += fmt.Sprintf(
 				" The real-browser rung (fetch.browser) could NOT RUN (%s) — that is a tool outage on this server, not proof of IP reputation.",
@@ -759,29 +815,39 @@ func (h *Harvester) fetchURLWithPolicy(
 	if providerFailure != nil {
 		message += " " + providerFailure.Error
 	}
-	message, lastErrorKind = convertOutageNote(
+	message, lastErrorKind, converterError := converterNote(
 		message,
 		lastErrorKind,
-		staticConverterOutage,
+		staticConvertErr,
+		emptyConvertErr,
 		emptyPDFConvert,
 		wrongPDF,
 		appShellFailure,
 	)
+	if browserConvertErr != nil {
+		converterError = browserConvertErr.Error() // the latest converter answer, quoted by the browser note
+	}
 	message = withRungs(loaders.loginWallNote(source, gaps.fail(message)), rungs) // a refused redirect (landing.go)
 	if (gaps.login || loaders.loginGateOnly) && !decisiveFailure(lastErrorKind, lastChallenge) {
 		lastErrorKind = errorKindLogin // the message leads with the login redirect or gate: the kind is its class
 	}
 	return Result{
-		Source:       source,
-		HTTPStatus:   lastStatus,
-		Error:        message,
-		ErrorKind:    lastErrorKind,
-		Challenge:    lastChallenge,
-		Chars:        lastContentChars,
-		ContentChars: lastContentChars,
-		Rungs:        rungs,
+		Source:         source,
+		HTTPStatus:     lastStatus,
+		Error:          message,
+		ErrorKind:      lastErrorKind,
+		Challenge:      lastChallenge,
+		Chars:          lastContentChars,
+		ContentChars:   lastContentChars,
+		Rungs:          rungs,
+		converterError: converterError,
 	}
 }
+
+// keepThinKey marks the fetch of the address the caller named: only it keeps a
+// thin page as its answer; a fetch nested in it (a followed link, a pivot, an
+// archive copy) and an identifier's candidate fetch find better or fail.
+type keepThinKey struct{}
 
 func isPrivateURL(source string) bool {
 	// Jina's forwarding decision is lexical in the oracle. A public hostname

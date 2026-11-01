@@ -13,7 +13,9 @@ func TestCheckModelFamilies(t *testing.T) {
 		model, want string
 	}{
 		{engine.Claude, " HaIkU ", "haiku"}, {engine.Claude, "SONNET[1M]", "sonnet[1m]"}, {engine.Claude, "claude-future", "claude-future"}, {engine.Codex, "gpt-future", "gpt-future"},
-		{engine.Claude, "gpt-future", ""}, {engine.Codex, "haiku", ""}, {engine.Codex, "codex-fixture", ""}, {engine.Claude, "sonnet[1m][1m]", ""},
+		// An id of neither family goes to the engine, which judges it.
+		{engine.Codex, "o4-mini", "o4-mini"}, {engine.Codex, "codex-mini-latest", "codex-mini-latest"}, {engine.Claude, "sonnet[1m][1m]", "sonnet[1m][1m]"},
+		{engine.Claude, "gpt-future", ""}, {engine.Codex, "haiku", ""}, {engine.Codex, "claude-future", ""},
 	} {
 		got, err := CheckModel(tc.id, tc.model)
 		if tc.want == "" {

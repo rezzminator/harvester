@@ -70,6 +70,7 @@ func (r *Resolver) ResolveBook(ctx context.Context, query string) ([]Candidate, 
 				} `json:"bitstreams"`
 			}
 			if err := getJSON(ctx, client, detailURL, &detail); err != nil {
+				noteFailure("oapen", err) // a listed book whose record would not load: a failed lookup, not absence
 				continue
 			}
 			for _, bs := range detail.Bitstreams {
@@ -231,12 +232,13 @@ func (r *Resolver) ResolveBook(ctx context.Context, query string) ([]Candidate, 
 				Metadata []doabMetadata `json:"metadata"`
 			} `json:"bitstreams"`
 		}
-		if getJSON(
+		if err := getJSON(
 			ctx,
 			client,
 			"https://directory.doabooks.org/rest/items/"+url.PathEscape(item.UUID)+"?expand=metadata,bitstreams",
 			&detail,
-		) != nil {
+		); err != nil {
+			noteFailure("doab", err) // a listed book whose record would not load: a failed lookup, not absence
 			continue
 		}
 		pools := make([]doabMetadata, 0, len(detail.Metadata))
@@ -315,6 +317,7 @@ func (r *Resolver) ResolveBook(ctx context.Context, query string) ([]Candidate, 
 func (r *Resolver) findOpenLibrary(ctx context.Context, client *http.Client, query string, limit int) []Candidate {
 	var openLibrary struct {
 		Docs []struct {
+			Key     string   `json:"key"`
 			Title   string   `json:"title"`
 			Authors []string `json:"author_name"`
 			Year    int      `json:"first_publish_year"`
@@ -324,19 +327,26 @@ func (r *Resolver) findOpenLibrary(ctx context.Context, client *http.Client, que
 	}
 	raw := "https://openlibrary.org/search.json?q=" + url.QueryEscape(
 		query,
-	) + "&fields=title,author_name,first_publish_year,isbn,ebook_access&limit=" + fmt.Sprint(
+	) + "&fields=key,title,author_name,first_publish_year,isbn,ebook_access&limit=" + fmt.Sprint(
 		limit,
 	)
 	out := []Candidate{}
 	if err := getJSON(ctx, client, raw, &openLibrary); err == nil {
 		for _, book := range openLibrary.Docs {
-			if len(book.ISBN) == 0 {
+			handle := ""
+			switch {
+			case len(book.ISBN) > 0:
+				handle = "isbn:" + book.ISBN[0]
+			case book.Key != "":
+				// an older or public-domain edition with no ISBN: its work page is the handle
+				handle = "https://openlibrary.org" + book.Key
+			default:
 				continue
 			}
 			out = append(
 				out,
 				Candidate{
-					URL:     "isbn:" + book.ISBN[0],
+					URL:     handle,
 					Source:  "openlibrary",
 					Kind:    kindBook,
 					Title:   book.Title,

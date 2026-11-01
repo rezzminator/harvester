@@ -2,6 +2,22 @@
 
 Every release of harvester. Versions follow [semantic versioning](https://semver.org); each release is the `main` commit tagged `v<version>`, with a GitHub release.
 
+## [0.2.2] — 2026-11-01
+
+### Fixed
+
+- **A harvest keeps what it got when one part fails.** Site extractors, `ask` and the MCP tools skip only the item that cannot be read and say what was left out, instead of failing the whole answer. A document the cache cannot save comes back whole and inline, marked as not saved to the cache.
+- A conversion that yields no text keeps what the converter read about the document, and its error names it (author, title); a converter failure after the browser got past a site's wall reports the converter's own words once, under a lead that matches the final failure.
+- Removing a cookie-consent overlay never removes an element holding over half the page's text.
+- A Steam review count that cannot be read shows as unknown instead of 0, and a review without an id is kept; a Substack comments answer must belong to the post being read.
+- A short page that merely mentions Cloudflare or a captcha is no longer reported as a challenge page unless the server answered with an error.
+- `harvester setup` prints a warning and carries on when it cannot delete a superseded conversion environment.
+- On macOS, a cache or temp directory reached through a link (`/var` to `/private/var`) works, the browser worker installs into the resolved environment path, and a daemon socket path too long for the system fails with a clear error instead of `invalid argument`.
+- `harvester stop` also drains the second daemon that takes over when two sessions start at once, instead of waiting for it until the timeout.
+- `ask` skips a Codex output item it cannot decode, with a warning, and keeps the earlier message as the answer.
+- An `ask` on a busy machine, or over an engine that leaves a child process running after it answers, returns the answer instead of failing with `WaitDelay expired before I/O complete`.
+- On macOS, the leak check (`make leak`) runs under the system bash.
+
 ## [0.2.1] — 2026-11-01
 
 ### Changed

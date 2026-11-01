@@ -151,3 +151,29 @@ func TestDevtoRecordNotLoadedServesThePage(t *testing.T) {
 		t.Fatalf("API requests %v, want the record alone", site.requests)
 	}
 }
+
+// TestDevtoStatesNoCountAndServesACommentWithoutAnID: an article record stating
+// no comments_count still renders, its count line reading unstated, and a
+// comment served with no id_code stays in the tree under a key of its own,
+// linked to the article alone; neither makes the artifact partial.
+func TestDevtoStatesNoCountAndServesACommentWithoutAnID(t *testing.T) {
+	t.Parallel()
+	site := devtoSite(t)
+	site.answers[devtoArticleAPI] = strings.Replace(site.answers[devtoArticleAPI],
+		`"comments_count": 12`, `"comments_counts": 12`, 1)
+	site.answers[devtoCommentsAPI] = strings.Replace(site.answers[devtoCommentsAPI], `"id_code": "38f1m",`, "", 1)
+	result := site.harvester(t).FetchWithOptions(context.Background(), devtoURL, FetchOptions{Refresh: true})
+	if result.Error != "" || result.Partial != "" {
+		t.Fatalf("the article is not complete: partial=%q error=%q\n%.1500s", result.Partial, result.Error,
+			result.Content)
+	}
+	want := strings.Replace(strings.Join(devtoWant(t), ","), "38f1m", "no-id-0", 1)
+	if got := strings.Join(socialRendered(result.Content), ","); got != want {
+		t.Fatalf("comments or their order are wrong: got %v, want %v\n%.2500s", got, want, result.Content)
+	}
+	for _, text := range []string{"**Replies:** unstated · 12 loaded · 1 deleted\n\n", "[no-id-0](" + devtoURL + ")"} {
+		if !strings.Contains(result.Content, text) {
+			t.Fatalf("the artifact lacks %q:\n%.2500s", text, result.Content)
+		}
+	}
+}

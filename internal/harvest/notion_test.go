@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
+
+	"golang.org/x/net/html"
 )
 
 // The fixtures (testdata/notion) are a captured public Notion page's block
@@ -284,5 +287,49 @@ func TestNotionTreeNotLoadedFallsThrough(t *testing.T) {
 	}
 	if !strings.Contains(result.Partial, "the page's block tree did not load") {
 		t.Fatalf("the partial marker does not name the unloaded tree: %q", result.Partial)
+	}
+}
+
+// TestNotionKeptAnswerThatNoLongerDecodesIsNamed: one kept answer that no
+// longer decodes is left out and named in the partial marker, and the kept
+// answers after it still replay.
+func TestNotionKeptAnswerThatNoLongerDecodesIsNamed(t *testing.T) {
+	t.Parallel()
+	doc, err := html.Parse(strings.NewReader("<html><body></body></html>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const pageID = "2d1d59a4-168c-4524-bed0-a40b04de892a"
+	block := func(id, title string) string {
+		return `"` + id + `":{"value":{"role":"reader","value":{"id":"` + id + `","type":"text",` +
+			`"properties":{"title":[["` + title + `"]]},"content":[]}}}`
+	}
+	keepAnswer(doc, notionAnswerTag, "k", notionKindChunk, 0, []byte(
+		`{"cursor":{"stack":[]},"recordMap":{"block":{"`+pageID+`":{"value":{"role":"reader","value":{"id":"`+
+			pageID+`","type":"page","properties":{"title":[["Kept page"]]},"content":["b1","b3"]}}},`+block("b1", "first")+`,`+
+			`"b3":{"value":{"role":"reader","value":{"id":"b3","type":"text","properties":{"title":"oops"},"content":[]}}}}}}`))
+	keepAnswer(doc, notionAnswerTag, "k", notionKindRecords, 1, []byte(`not json`))
+	keepAnswer(doc, notionAnswerTag, "k", notionKindRecords, 2, []byte(
+		`{"asked":["b2"],"answer":{"recordMap":{"block":{`+block("b2", "second")+`}}}}`))
+	base, err := url.Parse(notionURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, ok := notionPageOf(doc, base)
+	if !ok || state.answers != 3 || state.undecoded != 1 || state.records != 1 || state.block("b2") == nil {
+		t.Fatalf("the answers after the undecodable one did not replay: ok=%v answers=%d undecoded=%d records=%d",
+			ok, state.answers, state.undecoded, state.records)
+	}
+	extraction, ok := extractNotionPage(doc, base)
+	if want := "1 kept answer(s) of the site's API no longer decoded and were left out"; !ok ||
+		!strings.Contains(extraction.partial, want) {
+		t.Fatalf("the partial marker lacks %q: ok=%v partial=%q", want, ok, extraction.partial)
+	}
+	// A rich-text property that does not decode costs that property alone: the
+	// block beside it renders, and the partial marker names the unreadable one.
+	if want := "1 rich-text propert(ies) did not decode and were left out (title of text block b3)"; !strings.Contains(
+		extraction.partial, want) || !strings.Contains(extraction.markdown, "first") {
+		t.Fatalf("the unreadable property is not named beside the kept block: partial=%q\n%s", extraction.partial,
+			extraction.markdown)
 	}
 }

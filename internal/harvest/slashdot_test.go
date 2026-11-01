@@ -141,3 +141,26 @@ func TestSlashdotCommentsNotLoadedNameTheGap(t *testing.T) {
 		})
 	}
 }
+
+// TestSlashdotAnswerStatingNoTotalUsesThePageCount: a comment list stating no
+// total is accepted, its comments rendered, and the count the page's own
+// comment bubble states is the one reconciled against.
+func TestSlashdotAnswerStatingNoTotalUsesThePageCount(t *testing.T) {
+	t.Parallel()
+	site := slashdotSite(t)
+	site.answers[slashdotAjax] = strings.Replace(site.answers[slashdotAjax], "totalcommentcnt: 6, ", "", 1)
+	site.answers[slashdotPagePath] = strings.Replace(site.answers[slashdotPagePath],
+		`#comments" title="">6</a>`, `#comments" title="">9</a>`, 1)
+	result := site.harvester(t).FetchWithOptions(context.Background(), slashdotURL, FetchOptions{Refresh: true})
+	want := "66000001,66000002,66000005,66000003,66000004,66000006"
+	if got := strings.Join(socialRendered(result.Content), ","); got != want {
+		t.Fatalf("comments or their order are wrong: got %v, want %v (partial %q error %q)\n%.2500s", got, want,
+			result.Partial, result.Error, result.Content)
+	}
+	wantPartial := "slashdot story: 6 of 9 stated replies loaded — 3 stated repl(ies) not served: " +
+		"the discussion's comment list did not serve them"
+	if result.Partial != wantPartial || !strings.Contains(result.Content, "**Replies:** 9 stated · 6 loaded") {
+		t.Fatalf("the count is not the page's: partial %q, want %q\n%.1500s", result.Partial, wantPartial,
+			result.Content)
+	}
+}
