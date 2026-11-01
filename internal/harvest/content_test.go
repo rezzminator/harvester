@@ -55,9 +55,12 @@ func TestBibliographicLandingCycleStopsAfterOneHop(t *testing.T) {
 			Converter: convert,
 		},
 	)
+	// The cycle stops after one hop, and the page asked for stays the answer:
+	// its abstract and metadata, a thin copy naming why.
 	got := h.Fetch(context.Background(), sourceA)
-	if got.Error == "" {
-		t.Fatalf("landing cycle unexpectedly fetched content: %#v", got)
+	if got.Error != "" || got.Source != sourceA || got.Partial != landingThinGap ||
+		got.Content != "# Abstract\n# Fingerprint\n# Cite this\n" {
+		t.Fatalf("landing cycle = %#v, want %s's landing page kept with partial %q", got, sourceA, landingThinGap)
 	}
 	if aRequests > 2 || bRequests > 2 {
 		t.Fatalf("landing cycle was followed repeatedly: sourceA=%d sourceB=%d", aRequests, bRequests)

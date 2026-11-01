@@ -214,6 +214,8 @@ type seThread struct {
 	question *seQuestion
 	pages    map[int]seAnswersPage
 	dropped  map[string]bool
+	// undecoded counts the kept answers that no longer decode.
+	undecoded int
 }
 
 // seThreadOf reads the question page is and the API answers kept in it.
@@ -248,10 +250,10 @@ func seThreadOf(doc *html.Node, page *url.URL) (seThread, bool) {
 		}
 		if err != nil {
 			// graft kept only answers that decoded; one that no longer does is
-			// a bug, logged and left out (the reconciliation names what is
-			// missing).
+			// a bug, logged, counted and left out (the rendered gaps name it).
 			obs.Logger(context.Background()).Warn("harvest: a kept Stack Exchange answer no longer decodes; left out",
 				"kind", kind, obs.FieldErr, err.Error())
+			thread.undecoded++
 		}
 	}
 	return thread, true
@@ -378,8 +380,8 @@ func (thread seThread) check(want seWanted, body []byte, contentType string) err
 			return fmt.Errorf("answered by no question #%d on %s (deleted, or not on this site)", id, thread.ref.site)
 		case questions[0].QuestionID != id:
 			return fmt.Errorf("answered by the record of question #%d, not #%d", questions[0].QuestionID, id)
-		case questions[0].AnswerCount == nil || questions[0].CommentCount == nil:
-			return fmt.Errorf("answered by a record of #%d stating no answer or comment count", id)
+		case questions[0].AnswerCount == nil:
+			return fmt.Errorf("answered by a record of #%d stating no answer count", id)
 		}
 		return nil
 	}
@@ -474,12 +476,17 @@ func extractStackExchangeQuestion(doc *html.Node, page *url.URL) (siteExtraction
 		return siteExtraction{}, false
 	}
 	question := thread.question
+	gap := keptAnswerGap("Stack Exchange", thread.undecoded)
 	if question == nil {
 		// Nothing of the question is proved without its record: the page goes
 		// on down the ladder (a wall is refused, the browser rung may pass it),
 		// this gap named in whatever path renders it.
-		return siteExtraction{unrendered: "stackexchange question: the question's API record was not loaded " +
-			"(its answers, comments and stated counts not read from the API; the page is stored as rendered)"}, false
+		unrendered := "stackexchange question: the question's API record was not loaded " +
+			"(its answers, comments and stated counts not read from the API; the page is stored as rendered)"
+		if gap != "" {
+			unrendered += "; " + gap
+		}
+		return siteExtraction{unrendered: unrendered}, false
 	}
 	var out strings.Builder
 	base, err := url.Parse(thread.ref.questionURL())
@@ -518,28 +525,31 @@ func extractStackExchangeQuestion(doc *html.Node, page *url.URL) (siteExtraction
 	case rest < 0:
 		answerLine += fmt.Sprintf(" · %d more loaded than stated", -rest)
 	}
-
-	commentsStated := *question.CommentCount
-	commentsLoaded := len(question.Comments)
-	if gap := seCommentGap("the question", *question.CommentCount, len(question.Comments)); gap != "" {
+	if gap != "" {
 		gaps = append(gaps, gap)
 	}
-	// The stated and loaded totals cover the same posts: an answer whose count
-	// was not read is left out of both, its comments counted apart.
+
+	// The stated and loaded totals cover the same posts: a post (the question
+	// or an answer) whose count was not read is left out of both, its comments
+	// counted apart.
+	commentsStated, commentsLoaded := 0, 0
 	uncountedPosts, uncountedComments := 0, 0
-	for _, answer := range answers {
-		post := "answer #" + strconv.FormatInt(answer.AnswerID, 10)
-		if answer.CommentCount == nil {
+	reconcile := func(post string, stated *int, loaded int) {
+		if stated == nil {
 			gaps = append(gaps, post+": the stated comment count was not read")
 			uncountedPosts++
-			uncountedComments += len(answer.Comments)
-			continue
+			uncountedComments += loaded
+			return
 		}
-		commentsLoaded += len(answer.Comments)
-		commentsStated += *answer.CommentCount
-		if gap := seCommentGap(post, *answer.CommentCount, len(answer.Comments)); gap != "" {
+		commentsLoaded += loaded
+		commentsStated += *stated
+		if gap := seCommentGap(post, *stated, loaded); gap != "" {
 			gaps = append(gaps, gap)
 		}
+	}
+	reconcile("the question", question.CommentCount, len(question.Comments))
+	for _, answer := range answers {
+		reconcile("answer #"+strconv.FormatInt(answer.AnswerID, 10), answer.CommentCount, len(answer.Comments))
 	}
 	countLine := "**Answers:** " + answerLine + " · **Comments:** " +
 		fmt.Sprintf("%d stated · %d loaded, on the question and the answers loaded", commentsStated, commentsLoaded)

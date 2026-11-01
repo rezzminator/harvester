@@ -3,7 +3,9 @@ package harvest
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -24,6 +26,9 @@ type notionRenderer struct {
 	base     *url.URL
 	seen     map[string]bool
 	rendered map[string]bool
+	// unreadable names, once each, the rich-text properties that did not
+	// decode and were left out, in the order they were read.
+	unreadable []string
 }
 
 // notionHeadings maps a heading block to its Markdown level (the page title
@@ -81,7 +86,7 @@ func (renderer *notionRenderer) block(id string, number int) string {
 }
 
 func (renderer *notionRenderer) render(block *notionBlock, number int) (string, bool) {
-	title := renderer.rich(block.Properties["title"], false)
+	title := renderer.rich(block, "title", false)
 	children := func() string { return renderer.children(block.Content) }
 	if level, heading := notionHeadings[block.Type]; heading {
 		return notionJoin(strings.Repeat("#", level)+" "+strings.Join(strings.Fields(title), " "), children()), true
@@ -91,7 +96,7 @@ func (renderer *notionRenderer) render(block *notionBlock, number int) (string, 
 		if source == "" {
 			return "", false
 		}
-		label := notionJoin(renderer.rich(block.Properties["caption"], false))
+		label := notionJoin(renderer.rich(block, "caption", false))
 		if label == "" {
 			label = block.Type
 		}
@@ -101,7 +106,7 @@ func (renderer *notionRenderer) render(block *notionBlock, number int) (string, 
 	case notionTypeText:
 		return notionJoin(title, children()), true
 	case "toggle":
-		summary := renderer.rich(block.Properties["title"], true)
+		summary := renderer.rich(block, "title", true)
 		return notionJoin(wrapInline(summary, "**"), children()), true
 	case "bulleted_list":
 		return notionItem("- ", title, children()), true
@@ -109,7 +114,7 @@ func (renderer *notionRenderer) render(block *notionBlock, number int) (string, 
 		return notionItem(strconv.Itoa(max(number, 1))+". ", title, children()), true
 	case "to_do":
 		box := "- [ ] "
-		if renderer.plain(block.Properties["checked"]) == "Yes" {
+		if renderer.plain(block, "checked") == "Yes" {
 			box = "- [x] "
 		}
 		return notionItem(box, title, children()), true
@@ -121,10 +126,10 @@ func (renderer *notionRenderer) render(block *notionBlock, number int) (string, 
 		}
 		return prefixLines(notionJoin(title, children()), "> ", ">"), true
 	case "code":
-		return "```" + renderer.plain(block.Properties["language"]) + "\n" +
-			strings.Trim(renderer.plain(block.Properties["title"]), "\n") + "\n```", true
+		return "```" + renderer.plain(block, "language") + "\n" +
+			strings.Trim(renderer.plain(block, "title"), "\n") + "\n```", true
 	case "equation":
-		return "$$\n" + renderer.plain(block.Properties["title"]) + "\n$$", true
+		return "$$\n" + renderer.plain(block, "title") + "\n$$", true
 	case "divider":
 		return "---", true
 	case "bookmark":
@@ -136,13 +141,13 @@ func (renderer *notionRenderer) render(block *notionBlock, number int) (string, 
 		if label == "" {
 			label = link
 		}
-		return notionJoin("["+label+"]("+link+")", renderer.rich(block.Properties["description"], false)), true
+		return notionJoin("["+label+"]("+link+")", renderer.rich(block, "description", false)), true
 	case "image":
 		source := renderer.source(block)
 		if source == "" {
 			return "", false
 		}
-		return "![" + renderer.plain(block.Properties["caption"]) + "](" + source + ")", true
+		return "![" + renderer.plain(block, "caption") + "](" + source + ")", true
 	case notionTypePage, "collection_view_page":
 		return renderer.pageLink(title, block.ID), true
 	case "alias":
@@ -152,7 +157,7 @@ func (renderer *notionRenderer) render(block *notionBlock, number int) (string, 
 		}
 		label := ""
 		if linked := renderer.state.block(target); linked != nil {
-			label = renderer.plain(linked.Properties["title"])
+			label = renderer.plain(linked, "title")
 		}
 		return renderer.pageLink(label, target), true
 	case "table":
@@ -192,7 +197,7 @@ func (renderer *notionRenderer) table(block *notionBlock) string {
 		renderer.rendered[id] = true
 		cells := make([]string, 0, len(block.Format.ColumnOrder))
 		for _, column := range block.Format.ColumnOrder {
-			cells = append(cells, strings.ReplaceAll(renderer.rich(row.Properties[column], false), "|", `\|`))
+			cells = append(cells, strings.ReplaceAll(renderer.rich(row, column, false), "|", `\|`))
 		}
 		rows = append(rows, "| "+strings.Join(cells, " | ")+" |")
 		if len(rows) == 1 {
@@ -205,9 +210,9 @@ func (renderer *notionRenderer) table(block *notionBlock) string {
 // source is the address a media or bookmark block names; a file the site
 // hosts is reached through the page host's image proxy.
 func (renderer *notionRenderer) source(block *notionBlock) string {
-	source := renderer.plain(block.Properties["source"])
+	source := renderer.plain(block, "source")
 	if source == "" {
-		source = renderer.plain(block.Properties["link"])
+		source = renderer.plain(block, "link")
 	}
 	if source == "" {
 		source = block.Format.DisplaySource
@@ -244,49 +249,60 @@ func (renderer *notionRenderer) resolve(link string) string {
 	return renderer.base.ResolveReference(parsed).String()
 }
 
-// notionSegments decodes a rich-text property: segments of a text and its
-// marks; nil, logged, when it is not one.
-func notionSegments(raw json.RawMessage) [][]json.RawMessage {
-	if len(raw) == 0 {
+// richSegments decodes the rich-text property name of block: segments of a
+// text and its marks; nil when it is absent, or (logged, named in unreadable)
+// when it is not one.
+func (renderer *notionRenderer) richSegments(block *notionBlock, name string) [][]json.RawMessage {
+	if block == nil || len(block.Properties[name]) == 0 {
 		return nil
 	}
 	var segments [][]json.RawMessage
-	if err := json.Unmarshal(raw, &segments); err != nil {
+	if err := json.Unmarshal(block.Properties[name], &segments); err != nil {
 		obs.Logger(context.Background()).Warn("harvest: a Notion rich-text property does not decode; left out",
-			obs.FieldErr, err.Error())
+			"property", name, "block", block.ID, obs.FieldErr, err.Error())
+		label := fmt.Sprintf("%s of %s block %s", name, block.Type, block.ID)
+		if !slices.Contains(renderer.unreadable, label) {
+			renderer.unreadable = append(renderer.unreadable, label)
+		}
 		return nil
 	}
 	return segments
 }
 
-// plain is a rich-text property's text without its marks.
-func (renderer *notionRenderer) plain(raw json.RawMessage) string {
+// notionSegmentText is a rich-text segment's text; a segment whose text is
+// not a string keeps its raw value as the text (logged), never dropping it.
+func notionSegmentText(segment []json.RawMessage) string {
+	var part string
+	if err := json.Unmarshal(segment[0], &part); err != nil {
+		obs.Logger(context.Background()).Warn("harvest: a Notion rich-text segment's text is not a string; "+
+			"its raw value kept as the text", "value", logSource(string(segment[0])), obs.FieldErr, err.Error())
+		return strings.TrimSpace(string(segment[0]))
+	}
+	return part
+}
+
+// plain is the rich-text property name of block's text without its marks.
+func (renderer *notionRenderer) plain(block *notionBlock, name string) string {
 	var text strings.Builder
-	for _, segment := range notionSegments(raw) {
-		var part string
-		if len(segment) > 0 && json.Unmarshal(segment[0], &part) == nil {
-			text.WriteString(part)
+	for _, segment := range renderer.richSegments(block, name) {
+		if len(segment) > 0 {
+			text.WriteString(notionSegmentText(segment))
 		}
 	}
 	return strings.TrimSpace(text.String())
 }
 
-// rich renders a rich-text property as inline Markdown: bold, italics,
+// rich renders the rich-text property name of block as inline Markdown: bold, italics,
 // strike-through, code, links, and the mentions it can name (a page, a
 // date, an equation); noBold leaves bold out (a toggle's summary, bold
 // already).
-func (renderer *notionRenderer) rich(raw json.RawMessage, noBold bool) string {
+func (renderer *notionRenderer) rich(block *notionBlock, name string, noBold bool) string {
 	var text strings.Builder
-	for _, segment := range notionSegments(raw) {
-		var part string
+	for _, segment := range renderer.richSegments(block, name) {
 		if len(segment) == 0 {
 			continue
 		}
-		if err := json.Unmarshal(segment[0], &part); err != nil {
-			obs.Logger(context.Background()).Warn("harvest: a Notion rich-text segment has no text; left out",
-				obs.FieldErr, err.Error())
-			continue
-		}
+		part := notionSegmentText(segment)
 		var marks [][]json.RawMessage
 		if len(segment) > 1 {
 			if err := json.Unmarshal(segment[1], &marks); err != nil {
@@ -324,7 +340,7 @@ func (renderer *notionRenderer) segment(text string, marks [][]json.RawMessage, 
 		case "a":
 			link = renderer.resolve(argument)
 		case "p":
-			text = renderer.pageLink(renderer.plain(renderer.titleOf(argument)), argument)
+			text = renderer.pageLink(renderer.plain(renderer.state.block(argument), "title"), argument)
 		case "e":
 			text = "$" + argument + "$"
 		case "d":
@@ -359,12 +375,4 @@ func (renderer *notionRenderer) segment(text string, marks [][]json.RawMessage, 
 		core = "[" + core + "](" + link + ")"
 	}
 	return lead + core + trail
-}
-
-// titleOf is a held block's title property; nil when the page lacks it.
-func (renderer *notionRenderer) titleOf(id string) json.RawMessage {
-	if block := renderer.state.block(id); block != nil {
-		return block.Properties["title"]
-	}
-	return nil
 }

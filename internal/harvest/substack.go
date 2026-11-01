@@ -76,6 +76,17 @@ type substackPage struct {
 	comments substackComments
 	read     bool
 	dropped  bool
+	// undecoded counts the kept answers that no longer decode.
+	undecoded int
+}
+
+// keptAnswerGap names the kept answers of site a later reading could not
+// replay (no longer decoding, or out of order) and so left out; "" when none.
+func keptAnswerGap(site string, count int) string {
+	if count == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d kept %s answer(s) could not be replayed and were left out", count, site)
 }
 
 // substackPreload decodes the page's window._preloads JSON; false when the
@@ -159,7 +170,7 @@ func substackPageOf(doc *html.Node) (substackPage, bool) {
 			obs.FieldErr, err.Error())
 		return substackPage{}, false
 	}
-	if state.post.ID <= 0 || state.post.CommentCount == nil {
+	if state.post.ID <= 0 {
 		return substackPage{}, false
 	}
 	for _, node := range keptAnswers(doc, substackAnswerTag) {
@@ -170,6 +181,7 @@ func substackPageOf(doc *html.Node) (substackPage, bool) {
 		if err := json.Unmarshal([]byte(rawText(node)), &state.comments); err != nil {
 			obs.Logger(context.Background()).Warn("harvest: a kept Substack answer no longer decodes; left out",
 				obs.FieldErr, err.Error())
+			state.undecoded++
 			continue
 		}
 		state.read = true
@@ -207,8 +219,9 @@ func substackLoaders(doc *html.Node, page *url.URL) []pageLoader {
 	}}
 }
 
-// checkSubstack proves an answer is post id's comment tree: every comment in
-// it names that post.
+// checkSubstack proves an answer is post id's comment tree: every comment that
+// names a post names that one, and a tree holding comments has one that does
+// (a comment naming no post is kept, but proves nothing).
 func checkSubstack(id int, body []byte, contentType string) error {
 	var answer struct {
 		Comments *[]substackComment `json:"comments"`
@@ -217,13 +230,15 @@ func checkSubstack(id int, body []byte, contentType string) error {
 		return fmt.Errorf("answered by a %s body that is not the API's comment tree of post %d",
 			discourseContentType(contentType), id)
 	}
+	named := false
 	var walk func([]substackComment) error
 	walk = func(comments []substackComment) error {
 		for index := range comments {
-			switch comment := &comments[index]; {
-			case comment.ID <= 0:
-				return fmt.Errorf("answered by a comment tree holding a comment with no id")
-			case comment.PostID != id:
+			switch comment := &comments[index]; comment.PostID {
+			case id:
+				named = true
+			case 0:
+			default:
 				return fmt.Errorf("answered by a comment of post %d, not %d", comment.PostID, id)
 			}
 			if err := walk(comments[index].Children); err != nil {
@@ -232,7 +247,13 @@ func checkSubstack(id int, body []byte, contentType string) error {
 		}
 		return nil
 	}
-	return walk(*answer.Comments)
+	if err := walk(*answer.Comments); err != nil {
+		return err
+	}
+	if len(*answer.Comments) > 0 && !named {
+		return fmt.Errorf("answered by a comment tree in which no comment names post %d", id)
+	}
+	return nil
 }
 
 // substackUnavailable names why a comment the API serves with no body is not
@@ -255,10 +276,17 @@ func substackUnavailable(comment *substackComment) string {
 func substackPosts(comments []substackComment, parent, postURL string, out []socialPost) []socialPost {
 	for index := range comments {
 		comment := &comments[index]
-		id := strconv.Itoa(comment.ID)
+		id, link := strconv.Itoa(comment.ID), postURL
+		if comment.ID > 0 {
+			link += "/comment/" + id
+		} else {
+			// A comment the API served with no id keeps its place and replies
+			// under a key of its own, and has no link of its own.
+			id = fmt.Sprintf("no-id-%d", len(out))
+		}
 		post := socialPost{
 			id: id, parent: parent, posted: githubPosted(comment.Date), author: unknownAuthor,
-			link: postURL + "/comment/" + id, unavailable: substackUnavailable(comment),
+			link: link, unavailable: substackUnavailable(comment),
 		}
 		switch {
 		case comment.Handle != "":
@@ -291,12 +319,16 @@ func extractSubstackPost(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 		title: post.Title,
 		post: socialPost{
 			id: strconv.Itoa(post.ID), author: unknownAuthor, posted: githubPosted(post.PostDate),
-			link: link, body: htmlMarkdown(post.BodyHTML), stated: *post.CommentCount,
+			link: link, body: htmlMarkdown(post.BodyHTML),
 		},
-		repliesRead: state.read,
+		statedUnknown: post.CommentCount == nil,
+		repliesRead:   state.read,
 		notServed: "the publication's comment tree did not hold them (hidden from a reader not signed in, " +
 			"or posted after the tree was read)",
 		unavailableUnstated: true,
+	}
+	if post.CommentCount != nil {
+		thread.post.stated = *post.CommentCount
 	}
 	var authors []string
 	for _, byline := range post.Bylines {
@@ -312,6 +344,9 @@ func extractSubstackPost(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 	if post.Audience != "" && post.Audience != "everyone" {
 		thread.gaps = append(thread.gaps, "the post is for "+strings.ReplaceAll(post.Audience, "_", " ")+
 			" subscribers: its body may stop at the paywall")
+	}
+	if gap := keptAnswerGap("Substack", state.undecoded); gap != "" {
+		thread.gaps = append(thread.gaps, gap)
 	}
 	if state.read {
 		thread.replies = substackPosts(state.comments.Comments, thread.post.id, link, nil)

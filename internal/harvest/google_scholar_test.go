@@ -36,19 +36,28 @@ func TestGoogleScholarVersionsPageSuppliesSecondPagePDF(t *testing.T) {
 
 func TestGoogleScholarKeepsBibliographicFields(t *testing.T) {
 	withPublicDNSForProviderTest(t)
-	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return response(
-			r,
-			http.StatusOK,
-			"text/html",
-			`<div class="gs_ri"><h3 class="gs_rt"><a href="https://doi.org/10.1234/provider.fixture">Fixture article</a></h3><div class="gs_a">A Author - Journal, 2020 - repository.example</div><div class="gs_or_ggsm"><a href="https://repository.example/article.pdf">[PDF]</a></div></div>`,
-		), nil
-	})}
-	resolver := &Resolver{Client: client, GoogleScholarURL: "https://scholar.test"}
-	got, err := resolver.googleScholar(context.Background(), "fixture", 4)
-	if err != nil || len(got) != 1 || got[0].Title != "Fixture article" || got[0].Authors != "A Author" ||
-		got[0].Year != 2020 ||
-		got[0].URL != "https://repository.example/article.pdf" {
-		t.Fatalf("Scholar bibliographic fields = %#v err=%v", got, err)
+	for _, tc := range []struct{ name, page, title string }{
+		{
+			name:  "linked title",
+			page:  `<div class="gs_ri"><h3 class="gs_rt"><a href="https://doi.org/10.1234/provider.fixture">Fixture article</a></h3><div class="gs_a">A Author - Journal, 2020 - repository.example</div><div class="gs_or_ggsm"><a href="https://repository.example/article.pdf">[PDF]</a></div></div>`,
+			title: "Fixture article",
+		},
+		{
+			// a [CITATION] row has no title link; its PDF side link still serves it
+			name:  "citation row with a PDF side link",
+			page:  `<div class="gs_ri"><h3 class="gs_rt"><span class="gs_ctu"><span class="gs_ct1">[CITATION]</span><span class="gs_ct2">[C]</span></span> Fixture article</h3><div class="gs_a">A Author - Journal, 2020 - repository.example</div><div class="gs_or_ggsm"><a href="https://repository.example/article.pdf">[PDF]</a></div></div>`,
+			title: "Fixture article",
+		},
+	} {
+		client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return response(r, http.StatusOK, "text/html", tc.page), nil
+		})}
+		resolver := &Resolver{Client: client, GoogleScholarURL: "https://scholar.test"}
+		got, err := resolver.googleScholar(context.Background(), "fixture", 4)
+		if err != nil || len(got) != 1 || got[0].Title != tc.title || got[0].Authors != "A Author" ||
+			got[0].Year != 2020 ||
+			got[0].URL != "https://repository.example/article.pdf" {
+			t.Errorf("%s: Scholar bibliographic fields = %#v err=%v", tc.name, got, err)
+		}
 	}
 }

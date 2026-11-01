@@ -12,14 +12,13 @@ type claudeEnvelope struct {
 	Result     json.RawMessage `json:"result"`
 	Usage      json.RawMessage `json:"usage"`
 	ModelUsage json.RawMessage `json:"modelUsage"`
-	TotalCost  json.RawMessage `json:"total_cost_usd"`
 	IsError    bool            `json:"is_error"`
 }
 
 // parseModelUsage sums Claude's per-model `modelUsage` totals — the whole session, every API
-// turn. The envelope's `usage` block is the LAST turn only, while `total_cost_usd` is the sum: a
-// seat that took a second turn (a structured-output retry, a tool call) reported ~2k input tokens
-// against a cost that says 60k. Nil when the block is absent or empty.
+// turn. The envelope's `usage` block is the LAST turn only: a seat that took a second turn (a
+// structured-output retry, a tool call) reported ~2k input tokens where the session spent 60k. Nil
+// when the block is absent or empty.
 func parseModelUsage(raw json.RawMessage) (*TokenUsage, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
@@ -62,19 +61,17 @@ func parseOutput(result *processOutput, id engine.ID) error {
 				return fmt.Errorf("parse Claude result: %w", err)
 			}
 		}
+		// Token counts only label the receipt: one that does not parse leaves Usage unknown, never
+		// costs the answer.
 		var err error
-		result.Usage, err = parseTokenUsage(envelope.Usage)
-		if err != nil {
-			return fmt.Errorf("parse Claude usage: %w", err)
+		if result.Usage, err = parseTokenUsage(envelope.Usage); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("parse Claude usage: %v; usage unknown", err))
 		}
 		if whole, err := parseModelUsage(envelope.ModelUsage); err != nil {
-			return fmt.Errorf("parse Claude modelUsage: %w", err)
+			result.Warnings = append(result.Warnings, fmt.Sprintf("parse Claude modelUsage: %v; usage unknown", err))
+			result.Usage = nil
 		} else if whole != nil {
 			result.Usage = whole // every turn, not the last one
-		}
-		_, err = parseCost(envelope.TotalCost)
-		if err != nil {
-			return fmt.Errorf("parse Claude cost: %w", err)
 		}
 		if result.IsError {
 			return fmt.Errorf("headless envelope reported an error for Claude")
@@ -104,11 +101,15 @@ func parseCodexJSONL(result *processOutput) error {
 			Usage json.RawMessage `json:"usage"`
 			Error json.RawMessage `json:"error"`
 		}
+		// A line that is no event (a warning, a banner) or an event with no type costs that line:
+		// the terminal event and the answer may still follow.
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			return fmt.Errorf("parse Codex JSONL event %d: %w", lineNo+1, err)
+			result.Warnings = append(result.Warnings, fmt.Sprintf("skip Codex JSONL line %d: %v", lineNo+1, err))
+			continue
 		}
 		if event.Type == "" {
-			return fmt.Errorf("event %d from Codex has no type", lineNo+1)
+			result.Warnings = append(result.Warnings, fmt.Sprintf("skip Codex event %d: it has no type", lineNo+1))
+			continue
 		}
 		switch event.Type {
 		case "error":
@@ -129,9 +130,8 @@ func parseCodexJSONL(result *processOutput) error {
 			}
 			terminal = true
 			var err error
-			result.Usage, err = parseTokenUsage(event.Usage)
-			if err != nil {
-				return fmt.Errorf("parse Codex usage: %w", err)
+			if result.Usage, err = parseTokenUsage(event.Usage); err != nil {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("parse Codex usage: %v; usage unknown", err))
 			}
 		case "item.completed":
 			var item struct {
@@ -193,18 +193,4 @@ func parseTokenUsage(raw json.RawMessage) (*TokenUsage, error) {
 		return nil, nil
 	}
 	return usage, nil
-}
-
-func parseCost(raw json.RawMessage) (*float64, error) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
-	}
-	var cost float64
-	if err := json.Unmarshal(raw, &cost); err != nil {
-		return nil, err
-	}
-	if cost < 0 {
-		return nil, fmt.Errorf("cost must be nonnegative")
-	}
-	return &cost, nil
 }

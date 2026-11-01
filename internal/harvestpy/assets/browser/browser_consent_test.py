@@ -27,7 +27,7 @@ import threading
 from html import escape as html_escape
 
 import browser
-from browser import mark_incomplete, render_page, scroll_until_stable
+from browser import consent_removals, mark_incomplete, render_page, scroll_until_stable
 
 
 def run(coro):
@@ -111,6 +111,34 @@ def test_a_scroll_already_at_the_bottom_is_stable():
     outcome = run(scroll_until_stable(measure, scroll, settle, counting_clock()))
     assert outcome["stopped"] == "stable" and not outcome["growing"], outcome
     assert mark_incomplete("<html></html>", outcome, "tok") == "<html></html>"
+
+
+def test_consent_removals_keep_the_page_content_and_remove_the_overlays():
+    def element(tag, own=False, covers=True, mentions=True, text=0):
+        return {"tag": tag, "name": "div." + tag, "own": own, "covers": covers, "mentions": mentions, "text": text}
+
+    cases = [
+        # (name, candidates, body text, the tags removed)
+        ("an app shell holding a small page's text, a cookie line in it, is kept",
+         [element("shell", text=900)], 1000, []),
+        ("an app shell holding exactly half a small page's text is an overlay by its mention",
+         [element("shell", text=500)], 1000, ["shell"]),
+        ("an app shell holding one char past half a small page's text is kept",
+         [element("shell", text=501)], 1000, []),
+        ("a real overlay over a small page's content is removed", [element("overlay", text=120)], 1000, ["overlay"]),
+        ("an overlay that mentions no consent is kept", [element("modal", mentions=False, text=120)], 1000, []),
+        ("an own-marked overlay is removed though it covers little",
+         [element("cookie-bar", own=True, covers=False, text=80)], 1000, ["cookie-bar"]),
+        ("an own-marked overlay holding most of a small page's text is removed",
+         [element("consent-wall", own=True, text=900)], 1000, ["consent-wall"]),
+        ("an own-marked wrapper holding most of a big page's text is kept",
+         [element("cookie-app", own=True, text=4000)], 5000, []),
+        ("the shell is kept and the overlay inside it removed",
+         [element("shell", text=900), element("overlay", text=120)], 1000, ["overlay"]),
+    ]
+    for name, candidates, body, want in cases:
+        got = consent_removals(candidates, body)
+        assert got == want, f"{name}: removed {got}, want {want}"
 
 
 # --- live fixtures (BROWSER_LIVE=1) -----------------------------------------

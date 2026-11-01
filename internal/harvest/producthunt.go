@@ -101,12 +101,16 @@ type productHuntAnswer struct {
 // state names, the reviews and counts embedded there, and the review list
 // pages kept for it, in page order.
 type productHuntPage struct {
-	slug, name string
-	stated     int // the product's own review count, as the page states it
-	listTotal  int // the embedded review list's total (its widest list)
-	embedded   []productHuntReview
-	pages      []productHuntReviewList
-	dropped    bool
+	slug, name  string
+	stated      int  // the product's own review count, as the page states it
+	statedKnown bool // the page states that count
+	listTotal   int  // the embedded review list's total (its widest list)
+	listKnown   bool // an embedded list states a total
+	embedded    []productHuntReview
+	pages       []productHuntReviewList
+	dropped     bool
+	// undecoded counts the kept answers that could not be replayed.
+	undecoded int
 }
 
 // isProductHuntReviews accepts a product's reviews address.
@@ -193,15 +197,20 @@ func productHuntPageOf(doc *html.Node, page *url.URL) (productHuntPage, bool) {
 		if product.Slug != state.slug {
 			continue
 		}
+		found = true
+		if product.Name != "" {
+			state.name = product.Name
+		}
 		if product.ReviewsCount != nil {
-			found, state.name, state.stated = true, product.Name, *product.ReviewsCount
+			state.stated, state.statedKnown = *product.ReviewsCount, true
 		}
 		if list := product.DetailedReviews; list != nil {
-			if list.TotalCount != nil && *list.TotalCount > state.listTotal {
-				state.listTotal = *list.TotalCount
+			if list.TotalCount != nil && (!state.listKnown || *list.TotalCount > state.listTotal) {
+				state.listTotal, state.listKnown = *list.TotalCount, true
 			}
 			for _, edge := range list.Edges {
-				if edge.Node.ID != "" && !seen[edge.Node.ID] {
+				// A review with no id has nothing to deduplicate by: it stays.
+				if edge.Node.ID == "" || !seen[edge.Node.ID] {
 					seen[edge.Node.ID] = true
 					state.embedded = append(state.embedded, edge.Node)
 				}
@@ -211,21 +220,34 @@ func productHuntPageOf(doc *html.Node, page *url.URL) (productHuntPage, bool) {
 	if !found {
 		return productHuntPage{}, false
 	}
+	// The pages are read in order: one that cannot be replayed ends the read,
+	// and every kept answer after it is left out with it.
+	stopped := false
 	for _, node := range keptAnswers(doc, productHuntAnswerTag) {
 		if nodeAttr(node, "dropped") != "" {
 			state.dropped = true
 			continue
 		}
+		if stopped {
+			state.undecoded++
+			continue
+		}
 		var answer productHuntAnswer
-		if err := json.Unmarshal([]byte(rawText(node)), &answer); err != nil {
+		if err := json.Unmarshal([]byte(rawText(node)), &answer); err != nil || answer.Data == nil ||
+			answer.Data.Product == nil || answer.Data.Product.DetailedReviews == nil ||
+			answer.Data.Product.DetailedReviews.TotalCount == nil {
 			obs.Logger(context.Background()).Warn("harvest: a kept Product Hunt answer no longer decodes; left out",
-				"page", nodeAttr(node, "page"), obs.FieldErr, err.Error())
-			break
+				"page", nodeAttr(node, "page"), obs.FieldErr, fmt.Sprint(err))
+			state.undecoded++
+			stopped = true
+			continue
 		}
 		if number, err := strconv.Atoi(nodeAttr(node, "page")); err != nil || number != len(state.pages) {
 			obs.Logger(context.Background()).Warn("harvest: a kept Product Hunt answer is out of page order; left out",
 				"page", nodeAttr(node, "page"))
-			break
+			state.undecoded++
+			stopped = true
+			continue
 		}
 		state.pages = append(state.pages, *answer.Data.Product.DetailedReviews)
 	}
@@ -301,8 +323,8 @@ func productHuntLoaders(doc *html.Node, page *url.URL) []pageLoader {
 }
 
 // checkProductHunt proves an answer is a page of this product's review list:
-// no GraphQL error, the product named by its slug, a stated total and a
-// review list whose every review has an id.
+// no GraphQL error, the product named by its slug and a review list stating
+// its total; a review with no id is kept.
 func checkProductHunt(body []byte, contentType, slug string) error {
 	var answer productHuntAnswer
 	if err := json.Unmarshal(body, &answer); err != nil {
@@ -316,11 +338,6 @@ func checkProductHunt(body []byte, contentType, slug string) error {
 		answer.Data.Product.DetailedReviews == nil || answer.Data.Product.DetailedReviews.TotalCount == nil {
 		return fmt.Errorf("answered by a review page that is not this product's review list")
 	}
-	for _, edge := range answer.Data.Product.DetailedReviews.Edges {
-		if edge.Node.ID == "" {
-			return fmt.Errorf("answered by a review page holding a review with no id")
-		}
-	}
 	return nil
 }
 
@@ -330,6 +347,9 @@ func productHuntPost(review *productHuntReview, slug string) socialPost {
 	post := socialPost{
 		id: review.ID, parent: slug, author: unknownAuthor, posted: review.CreatedAt,
 		link: "https://www.producthunt.com/products/" + slug + "/reviews?review=" + review.ID,
+	}
+	if review.ID == "" {
+		post.id, post.link = "no-id", "https://www.producthunt.com/products/"+slug+"/reviews"
 	}
 	if review.User != nil && review.User.Name != "" {
 		post.author = review.User.Name
@@ -386,6 +406,7 @@ func extractProductHuntReviews(doc *html.Node, page *url.URL) (siteExtraction, b
 	}
 	reviews := state.embedded
 	thread.post.stated = max(state.stated, state.listTotal)
+	thread.statedUnknown = !state.statedKnown && !state.listKnown
 	if read {
 		reviews = nil
 		for index := range state.pages {
@@ -393,21 +414,28 @@ func extractProductHuntReviews(doc *html.Node, page *url.URL) (siteExtraction, b
 				reviews = append(reviews, edge.Node)
 			}
 		}
-		thread.post.stated = *state.pages[0].TotalCount
+		thread.post.stated, thread.statedUnknown = *state.pages[0].TotalCount, false
 	} else {
 		thread.notServed = "the page embeds only its first reviews; the rest are in the site's review list, " +
 			"which was not read"
 	}
-	if thread.post.stated != state.stated {
+	if state.statedKnown && thread.post.stated != state.stated {
 		thread.post.body = fmt.Sprintf("The page states %d reviews; the site's review list counts %d.",
 			state.stated, thread.post.stated)
+	}
+	if !read && thread.statedUnknown {
+		thread.gaps = append(thread.gaps,
+			"the site's review list was not read (only the page's embedded reviews are shown)")
 	}
 	if state.dropped && (!read || state.more()) {
 		thread.gaps = append(thread.gaps, "a further review page failed to load")
 	}
+	if gap := keptAnswerGap("Product Hunt", state.undecoded); gap != "" {
+		thread.gaps = append(thread.gaps, gap)
+	}
 	seen := map[string]bool{}
 	for index := range reviews {
-		if !seen[reviews[index].ID] {
+		if reviews[index].ID == "" || !seen[reviews[index].ID] {
 			seen[reviews[index].ID] = true
 			thread.replies = append(thread.replies, productHuntPost(&reviews[index], state.slug))
 		}

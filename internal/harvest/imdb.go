@@ -27,8 +27,7 @@ import (
 // list through loaders.go's budget, at most imdbReviewPages pages: a title
 // with thousands of reviews cannot be read whole, so the rest are named,
 // stated · loaded, never dropped silently. Each answer is proved this title's
-// list (no GraphQL error, the title's own id, a total, every review with an
-// id) before it is kept in the page as a harvester-imdb-answer element, so a
+// list (no GraphQL error, the title's own id, a total) before it is kept in the page as a harvester-imdb-answer element, so a
 // later conversion replays it like any followed loader. When no answer loads
 // the page is not rendered: it falls through, the review list named unread.
 
@@ -95,6 +94,10 @@ type imdbPage struct {
 	id      string
 	pages   []imdbAnswer
 	dropped bool
+	// next is the number of the page a loader asks for, past the pages kept and skipped.
+	next int
+	// skipped counts the kept pages that no longer decode or are out of order.
+	skipped int
 }
 
 // isIMDbReviews accepts an address naming a title's review page.
@@ -110,7 +113,7 @@ func imdbPageOf(doc *html.Node, page *url.URL) (imdbPage, bool) {
 		return imdbPage{}, false
 	}
 	state := imdbPage{id: match[1]}
-	state.pages, state.dropped = keptPages[imdbAnswer](doc, imdbAnswerTag, "IMDb")
+	state.pages, state.next, state.skipped, state.dropped = keptPages[imdbAnswer](doc, imdbAnswerTag, "IMDb")
 	return state, true
 }
 
@@ -129,10 +132,10 @@ func (state *imdbPage) loaded() int {
 func (state *imdbPage) more() bool {
 	count := len(state.pages)
 	switch {
+	case state.next >= imdbReviewPages:
+		return false
 	case count == 0:
 		return true
-	case count >= imdbReviewPages:
-		return false
 	}
 	last := state.pages[count-1].Data.Title.Reviews
 	if !last.PageInfo.HasNextPage || last.PageInfo.EndCursor == "" || len(last.Edges) == 0 ||
@@ -148,10 +151,10 @@ func imdbLoaders(doc *html.Node, page *url.URL) []pageLoader {
 	if !ok || state.dropped || !state.more() {
 		return nil
 	}
-	number := len(state.pages)
+	number := state.next
 	variables := map[string]any{"id": state.id, "first": imdbPageSize}
-	if number > 0 {
-		variables["after"] = state.pages[number-1].Data.Title.Reviews.PageInfo.EndCursor
+	if len(state.pages) > 0 {
+		variables["after"] = state.pages[len(state.pages)-1].Data.Title.Reviews.PageInfo.EndCursor
 	}
 	body, err := json.Marshal(struct {
 		Operation string         `json:"operationName"`
@@ -185,8 +188,8 @@ func imdbLoaders(doc *html.Node, page *url.URL) []pageLoader {
 }
 
 // checkIMDb proves an answer is a page of this title's review list: no
-// GraphQL error, the title named by its id, a stated total and a review list
-// whose every review has an id.
+// GraphQL error, the title named by its id and a stated total; a review with
+// no id is kept (the id only dedups and labels).
 func checkIMDb(body []byte, contentType, id string) error {
 	var answer imdbAnswer
 	if err := json.Unmarshal(body, &answer); err != nil {
@@ -200,13 +203,11 @@ func checkIMDb(body []byte, contentType, id string) error {
 	if title == nil || title.ID != id || title.Reviews == nil || title.Reviews.Total == nil {
 		return fmt.Errorf("answered by a body that is not title %s's review list with its total", id)
 	}
-	for index := range title.Reviews.Edges {
-		if title.Reviews.Edges[index].Node.ID == "" {
-			return fmt.Errorf("answered by a review page holding a review with no id")
-		}
-	}
 	return nil
 }
+
+// unknownReviewID labels a review whose API record states no id.
+const unknownReviewID = "unknown id"
 
 // imdbPosts maps the kept review pages to socialPosts under the title, each
 // review once (a cursor page may repeat one the previous page served), and
@@ -216,7 +217,7 @@ func imdbPosts(state *imdbPage) (out []socialPost, repeated int) {
 	for index := range state.pages {
 		for _, edge := range state.pages[index].Data.Title.Reviews.Edges {
 			review := edge.Node
-			if seen[review.ID] {
+			if review.ID != "" && seen[review.ID] {
 				repeated++
 				continue
 			}
@@ -240,6 +241,9 @@ func imdbPosts(state *imdbPage) (out []socialPost, repeated int) {
 				id: review.ID, parent: state.id, author: unknownAuthor, posted: unknownPosted,
 				link: "https://www.imdb.com/review/" + review.ID + "/", body: strings.Join(parts, "\n\n"),
 			}
+			if review.ID == "" {
+				post.id, post.link = unknownReviewID, "https://www.imdb.com/title/"+state.id+"/reviews/"
+			}
 			if review.Author != nil && review.Author.NickName != "" {
 				post.author = review.Author.NickName
 			}
@@ -259,9 +263,14 @@ func extractIMDbReviews(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 	if !ok {
 		return siteExtraction{}, false
 	}
+	gap := keptAnswerGap("IMDb", state.skipped)
 	if len(state.pages) == 0 {
-		return siteExtraction{unrendered: "imdb reviews: the title's review list was not loaded from IMDb's " +
-			"GraphQL API (its user reviews not read; the page is stored as another path served it)"}, false
+		unrendered := "imdb reviews: the title's review list was not loaded from IMDb's " +
+			"GraphQL API (its user reviews not read; the page is stored as another path served it)"
+		if gap != "" {
+			unrendered += "; " + gap
+		}
+		return siteExtraction{unrendered: unrendered}, false
 	}
 	first := state.pages[0].Data.Title
 	title := state.id
@@ -280,6 +289,9 @@ func extractIMDbReviews(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 		notServed:   "IMDb's GraphQL API ended its review list (no further page) before its stated total",
 		replies:     replies,
 	}
+	if gap != "" {
+		thread.gaps = append(thread.gaps, gap)
+	}
 	// served states what the pages held; a review a later page repeated is
 	// named and counted once, so served, loaded and the stated rest reconcile.
 	served := fmt.Sprintf("%d reviews served", state.loaded())
@@ -288,7 +300,7 @@ func extractIMDbReviews(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 	}
 	last := state.pages[len(state.pages)-1].Data.Title.Reviews.PageInfo
 	switch {
-	case len(state.pages) >= imdbReviewPages && last.HasNextPage:
+	case state.next >= imdbReviewPages && last.HasNextPage:
 		thread.notServed = fmt.Sprintf("the harvester reads %d pages of %d from IMDb's GraphQL API (%s); "+
 			"the rest were not requested", imdbReviewPages, imdbPageSize, served)
 	case last.HasNextPage:

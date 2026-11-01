@@ -35,7 +35,7 @@ func TestConverterDispatchTakesTheDetectedFormatKinds(t *testing.T) {
 	}
 	// The Office kinds the Go side routes (format_detect.go) each have a
 	// dispatch entry: a body their reader cannot open fails in that reader,
-	// never as an unknown kind.
+	// never passes through as a kind no converter reads.
 	for _, kind := range []string{
 		"doc", "xls", "rtf", "odt", "ods", "odp", "encrypted",
 		"docm", "dotx", "dotm", "xlsm", "xltx", "xltm", "pptm", "potx", "potm", "ppsx", "ppsm",
@@ -44,9 +44,9 @@ func TestConverterDispatchTakesTheDetectedFormatKinds(t *testing.T) {
 		if err := os.WriteFile(document, []byte("not an office body"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		_, err := converter.Convert(context.Background(), Request{Path: document, Kind: kind})
-		if err != nil && strings.Contains(err.Error(), "unsupported conversion kind") {
-			t.Errorf("%s: want a dispatch entry, got %v", kind, err)
+		got, err := converter.Convert(context.Background(), Request{Path: document, Kind: kind})
+		if err == nil && strings.Contains(got.Markdown, "no converter reads kind") {
+			t.Errorf("%s: want a dispatch entry, got %q", kind, got.Markdown)
 		}
 	}
 }

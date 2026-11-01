@@ -745,6 +745,22 @@ func ooxmlExtensionKind(source string) (string, bool) {
 	return "", false
 }
 
+// shortWallBody reports whether body is short enough (at most 4000 content
+// chars) for a weak wall signal to count.
+func shortWallBody(body []byte) bool {
+	return contentChars(string(body)) <= 4000
+}
+
+// bareWallWordCorroborated reports whether a bare vendor word ("captcha",
+// "cloudflare") may mark a wall: a real page names its CDN or loads a
+// cdnjs.cloudflare.com script, so the word counts only beside a 403/503 (a
+// Cloudflare interstitial can ship KBs of CSS past the short gate) or in a
+// short body that embeds a captcha widget.
+func bareWallWordCorroborated(low string, short bool, status int) bool {
+	return status == http.StatusForbidden || status == http.StatusServiceUnavailable ||
+		(short && hasCaptchaWidgetMarkup(low))
+}
+
 func isChallenge(body []byte, status int) bool {
 	low := strings.ToLower(string(withoutConsentMarkup(body))) // a banner's vendor list is never a wall
 	// Strong bot-wall phrases (net.py's _CHALLENGE_PHRASES, Cloudflare's "blocked"/1020 page, the Sucuri,
@@ -755,10 +771,9 @@ func isChallenge(body []byte, status int) bool {
 		}
 	}
 	// short is shared by both gates below so they cannot disagree at the boundary.
-	short := contentChars(string(body)) <= 4000
+	short := shortWallBody(body)
 	cf403 := status == http.StatusForbidden || status == http.StatusServiceUnavailable
-	// A Cloudflare interstitial can ship KBs of CSS past the short gate.
-	if short || cf403 {
+	if bareWallWordCorroborated(low, short, status) {
 		for _, marker := range []string{challengeMarkerCaptcha, challengeMarkerCloudflare, "turnstile", "attention required"} {
 			if strings.Contains(low, marker) {
 				return true

@@ -1,6 +1,7 @@
 package harvest
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,6 +64,25 @@ func TestReadBoundedFileEnforcesTheSizeLimit(t *testing.T) {
 	if _, err := readBoundedFile(filepath.Join(dir, "missing.txt"), 10); err == nil {
 		t.Fatal("readBoundedFile did not error on a missing file")
 	}
+
+	opened, err := os.Open(small)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err = readBounded(closeFails{opened}, small, 10)
+	if err != nil || string(data) != "hello" {
+		t.Fatalf("read whole, then a failed close = (%q, %v), want (\"hello\", nil): the read data stands", data, err)
+	}
+}
+
+// closeFails is an open file whose close reports an error after its own close.
+type closeFails struct{ *os.File }
+
+func (file closeFails) Close() error {
+	if err := file.File.Close(); err != nil {
+		return err
+	}
+	return errors.New("close: input/output error")
 }
 
 func TestSymlinkBelowReportsASymlinkedComponent(t *testing.T) {

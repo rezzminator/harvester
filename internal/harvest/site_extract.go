@@ -435,28 +435,33 @@ func keepAnswer(doc *html.Node, tag, key, kind string, number int, body []byte) 
 }
 
 // keptPages decodes the paged API answers kept in doc under tag, in page
-// order, stopping (logged, naming site) at one that no longer decodes or is
-// out of order; dropped reports a dropped loader's mark.
-func keptPages[T any](doc *html.Node, tag, site string) (pages []T, dropped bool) {
+// order. A page that no longer decodes or is out of order is skipped (logged,
+// naming site) and counted in skipped, the pages after it kept; next is the
+// number of the page a loader asks for after the last one kept or skipped;
+// dropped reports a dropped loader's mark.
+func keptPages[T any](doc *html.Node, tag, site string) (pages []T, next, skipped int, dropped bool) {
 	for _, node := range keptAnswers(doc, tag) {
 		if nodeAttr(node, "dropped") != "" {
 			dropped = true
 			continue
 		}
+		if number, err := strconv.Atoi(nodeAttr(node, "page")); err != nil || number != next {
+			obs.Logger(context.Background()).Warn("harvest: a kept "+site+" answer is out of page order; left out",
+				"page", nodeAttr(node, "page"))
+			skipped++
+			continue
+		}
+		next++
 		var answer T
 		if err := json.Unmarshal([]byte(rawText(node)), &answer); err != nil {
 			obs.Logger(context.Background()).Warn("harvest: a kept "+site+" answer no longer decodes; left out",
 				"page", nodeAttr(node, "page"), obs.FieldErr, err.Error())
-			break
-		}
-		if number, err := strconv.Atoi(nodeAttr(node, "page")); err != nil || number != len(pages) {
-			obs.Logger(context.Background()).Warn("harvest: a kept "+site+" answer is out of page order; left out",
-				"page", nodeAttr(node, "page"))
-			break
+			skipped++
+			continue
 		}
 		pages = append(pages, answer)
 	}
-	return pages, dropped
+	return pages, next, skipped, dropped
 }
 
 // isElement reports an element node with the given (custom) tag name.

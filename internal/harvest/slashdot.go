@@ -27,7 +27,7 @@ import (
 // the site answers nothing). With fetch_all and the lowest threshold the answer
 // holds every further comment's markup, keyed comment_<cid>, and its place in
 // the tree (update_data.new_cids_order with new_cids_data's parent ids), and
-// states the discussion's total (totalcommentcnt). The answer is a JavaScript
+// states the discussion's total (totalcommentcnt) when it knows it. The answer is a JavaScript
 // object literal, not JSON — bare keys — so it is read by quoting its keys.
 // It is checked to be this discussion's comment list (every fragment links
 // under the discussion's sid) before it is kept in the page as a
@@ -72,6 +72,8 @@ type slashdotPage struct {
 	more    int
 	answer  *slashdotAnswer
 	dropped bool
+	// undecoded counts the kept answers that no longer decode.
+	undecoded int
 }
 
 // isSlashdotStory accepts a Slashdot address naming a story.
@@ -131,6 +133,7 @@ func slashdotPageOf(doc *html.Node, page *url.URL) (slashdotPage, bool) {
 		if err != nil {
 			obs.Logger(context.Background()).Warn("harvest: a kept Slashdot answer no longer decodes; left out",
 				obs.FieldErr, err.Error())
+			state.undecoded++
 			continue
 		}
 		state.answer = &answer
@@ -234,16 +237,13 @@ func jsLiteralJSON(src []byte) []byte {
 }
 
 // checkSlashdot proves an answer is the discussion's comment list: it decodes,
-// states the discussion's total, names a parent for every comment it lists,
+// names a parent for every comment it lists,
 // and every comment's markup is one it lists, linked under the discussion.
 func checkSlashdot(body []byte, contentType, id string) error {
 	answer, err := slashdotDecode(body)
 	if err != nil || answer.HTML == nil {
 		return fmt.Errorf("answered by a %s body that is not the discussion's comment list",
 			discourseContentType(contentType))
-	}
-	if answer.Update.Total == nil {
-		return fmt.Errorf("answered by a comment list that states no total")
 	}
 	if len(answer.Update.Order) != len(answer.Update.Data) {
 		return fmt.Errorf("answered by a comment list naming %d parents for %d comments",
@@ -447,7 +447,11 @@ func extractSlashdotStory(doc *html.Node, page *url.URL) (siteExtraction, bool) 
 	}
 	switch {
 	case state.answer != nil:
-		thread.post.stated = *state.answer.Update.Total
+		if total := state.answer.Update.Total; total != nil {
+			thread.post.stated = *total
+		} else {
+			thread.post.stated = slashdotStated(doc, page, onPage, state.more)
+		}
 		thread.notServed = "the discussion's comment list did not serve them"
 	case state.dropped:
 		thread.post.stated = slashdotStated(doc, page, onPage, state.more)
@@ -455,6 +459,9 @@ func extractSlashdotStory(doc *html.Node, page *url.URL) (siteExtraction, bool) 
 	default:
 		thread.post.stated = slashdotStated(doc, page, onPage, state.more)
 		thread.notServed = "the discussion's further comments were not requested"
+	}
+	if gap := keptAnswerGap("Slashdot", state.undecoded); gap != "" {
+		thread.gaps = append(thread.gaps, gap)
 	}
 	if byline := firstWithAttr(doc, "class", "story-byline", nil); byline != nil {
 		text := strings.Join(strings.Fields(rawText(byline)), " ")

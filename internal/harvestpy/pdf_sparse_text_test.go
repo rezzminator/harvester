@@ -54,6 +54,32 @@ for text, image, readable in [
         assert 'using the native text layer instead' in result['markdown'], result
     else:
         assert result['error_class'] == 'OCRUnavailable', result
+# OCR models not staged: the text-layer pages still convert and only the scanned page is a gap;
+# a document of scans alone fails by that name.
+class Scan(Page):
+    text, image = '', True
+class Text(Page):
+    number, text, image = 1, 'Text layer page words', False
+pages = [Scan(), Text()]
+class TwoPages(Document):
+    page_count = 2
+    def __iter__(self): return iter(pages)
+    def __getitem__(self, index): return pages[index]
+def unstaged(*args): raise c.OCRModelsNotStaged('the OCR models for docling are not staged')
+c._ocr_pages = unstaged
+c.ocr_page_needed = lambda features: features
+c.page_features = lambda page: isinstance(page, Scan)
+c._pymupdf4llm_markdown = lambda *a, **kw: 'Text layer page words'
+sys.modules['pymupdf'].open = lambda _: TwoPages()
+result = c.convert({'path': 'fixture.pdf', 'kind': 'pdf'})
+assert result == {'ok': True, 'markdown': (
+    '_Converter gap: the OCR models for docling are not staged; page(s) 1 were not read_\n\n'
+    'Text layer page words\n')}, result
+pages = [Scan()]
+TwoPages.page_count = 1
+result = c.convert({'path': 'fixture.pdf', 'kind': 'pdf'})
+assert result == {'ok': False, 'error_class': 'OCRModelsNotStaged',
+                  'error': 'OCRModelsNotStaged: the OCR models for docling are not staged'}, result
 print('native text retained; unreadable scans remain failures')
 `
 	cmd := exec.Command(python, "-c", probe, dir)

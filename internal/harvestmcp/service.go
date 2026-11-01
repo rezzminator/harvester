@@ -435,24 +435,33 @@ func baseAddress(fetched, source string) string {
 	return ""
 }
 
+// scratchRemoveAll removes one private scratch directory; a test swaps it to fail.
+var scratchRemoveAll = os.RemoveAll
+
+// removeScratch removes a private scratch directory once its result is read
+// (a conversion, an inflate, an ask's receipts). A failed removal is logged at
+// warn, never returned: a leftover temp directory never costs the result.
+func removeScratch(ctx context.Context, label, directory string) {
+	if err := scratchRemoveAll(directory); err != nil {
+		obs.Logger(obs.Component(ctx, "mcp")).Warn("harvester.scratch.remove",
+			"op", label, "path", directory, obs.FieldErr, err.Error())
+	}
+}
+
 // convertScratch writes body to a private scratch file input.{extension},
 // hands the worker request with that path, and removes the scratch; label
-// names the scratch in every error, a failed cleanup included.
+// names the scratch in every error and in a failed cleanup's log line.
 func (converter pythonConverter) convertScratch(
 	ctx context.Context,
 	label, prefix, extension string,
 	body []byte,
 	request harvestpy.Request,
-) (markdown string, returnErr error) {
+) (string, error) {
 	directory, err := os.MkdirTemp("", prefix)
 	if err != nil {
 		return "", fmt.Errorf("create %s scratch: %w", label, err)
 	}
-	defer func() {
-		if cleanupErr := os.RemoveAll(directory); cleanupErr != nil {
-			returnErr = errors.Join(returnErr, fmt.Errorf("remove %s scratch: %w", label, cleanupErr))
-		}
-	}()
+	defer removeScratch(ctx, label, directory)
 	request.Path = filepath.Join(directory, "input."+extension)
 	request.OCRLang = harvest.OCRLangFrom(ctx)
 	request.BaseURL = baseAddress(harvest.BaseURLFrom(ctx), request.Source)

@@ -46,4 +46,17 @@ func TestSocialThreadNamesUnavailableAndUnservedReplies(t *testing.T) {
 	if _, partial := thread.render(); partial != "" {
 		t.Fatalf("a thread loading every stated reply is partial: %q", partial)
 	}
+	// A site that states no count: the line reads unstated, nothing is
+	// reconciled, and replies never read are named without a number.
+	thread.statedUnknown = true
+	markdown, partial = thread.render()
+	if !strings.Contains(markdown, "**Replies:** unstated · 1 loaded\n\n") || partial != "" {
+		t.Fatalf("an unstated count is reconciled: partial %q\n%s", partial, markdown)
+	}
+	thread.replies, thread.repliesRead = nil, false
+	markdown, partial = thread.render()
+	if !strings.Contains(markdown, "**Replies:** unstated · 0 loaded · gaps: replies not read\n\n") ||
+		partial != "bluesky post: 0 replies loaded, none stated — replies not read" {
+		t.Fatalf("unread unstated replies are not named: partial %q\n%s", partial, markdown)
+	}
 }

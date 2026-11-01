@@ -22,7 +22,7 @@ func (input daemonConverterInput) Write(body []byte) (int, error) {
 	if err := json.Unmarshal(body, &request); err != nil {
 		return 0, err
 	}
-	response, err := json.Marshal(map[string]any{"id": request.ID, "ok": true, "markdown": "shared service worker", "kind": "html"})
+	response, err := json.Marshal(map[string]any{"id": request.ID, "ok": true, "markdown": "shared service worker"})
 	if err != nil {
 		return 0, err
 	}

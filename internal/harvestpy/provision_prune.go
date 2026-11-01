@@ -68,7 +68,7 @@ func PruneEnvironments(ctx context.Context, root string, platform Platform, proc
 		report.Failed = append(report.Failed, PruneFailure{Path: envRoot, Err: err})
 		return report
 	}
-	release, err := lockProvisionRoot(ctx, envRoot)
+	release, err := provisionLock(ctx, envRoot)
 	if err != nil {
 		report.Failed = append(report.Failed, PruneFailure{Path: envRoot, Err: err})
 		return report

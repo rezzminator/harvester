@@ -263,8 +263,6 @@ func (item gitlabItem) check(label string, body []byte, contentType string) erro
 		return fmt.Errorf("answered with no %s %d in %s", item.noun(), item.iid, item.project)
 	case found.IID != strconv.Itoa(item.iid):
 		return fmt.Errorf("answered by the record of %s %s, not %d", item.noun(), found.IID, item.iid)
-	case found.UserNotesCount == nil:
-		return fmt.Errorf("answered by a record of %s %d stating no note count", item.noun(), item.iid)
 	case found.Notes == nil:
 		return fmt.Errorf("answered by a record of %s %d listing no notes", item.noun(), item.iid)
 	}
@@ -315,20 +313,25 @@ func extractGitLabItem(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 			break
 		}
 	}
-	stated := *record.UserNotesCount
-	countLine := fmt.Sprintf("**Notes:** %d stated · %d loaded (%d system note(s) not shown)", stated, len(notes),
-		system)
-	switch rest := stated - len(notes); {
-	case rest > 0 && len(gaps) == 0:
-		gaps = append(gaps, fmt.Sprintf("%d stated note(s) not in the API's list (deleted since the count, "+
-			"or not visible to a reader signed out)", rest))
-	case rest < 0:
-		countLine += fmt.Sprintf(" · %d more loaded than stated", -rest)
+	// The stated count only reconciles: a record stating none renders it not read.
+	statedText, surplus := "count not read (the record states no note count)", ""
+	if record.UserNotesCount != nil {
+		stated := *record.UserNotesCount
+		statedText = strconv.Itoa(stated)
+		switch rest := stated - len(notes); {
+		case rest > 0 && len(gaps) == 0:
+			gaps = append(gaps, fmt.Sprintf("%d stated note(s) not in the API's list (deleted since the count, "+
+				"or not visible to a reader signed out)", rest))
+		case rest < 0:
+			surplus = fmt.Sprintf(" · %d more loaded than stated", -rest)
+		}
 	}
+	countLine := fmt.Sprintf("**Notes:** %s stated · %d loaded (%d system note(s) not shown)", statedText,
+		len(notes), system) + surplus
 	partial := ""
 	if len(gaps) > 0 {
 		countLine += " · gaps: " + strings.Join(gaps, "; ")
-		partial = fmt.Sprintf("gitlab %s: %d of %d notes loaded — %s", noun, len(notes), stated,
+		partial = fmt.Sprintf("gitlab %s: %d of %s notes loaded — %s", noun, len(notes), statedText,
 			strings.Join(gaps, "; "))
 	}
 

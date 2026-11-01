@@ -283,25 +283,95 @@ func TestFormatParsersMatchTheBakeOffRecall(t *testing.T) {
 	})
 }
 
-// TestFormatParsersRefuseByName: an entity bomb is refused by name and a
-// broken feed ends in a named failure — never an empty document.
-func TestFormatParsersRefuseByName(t *testing.T) {
+// TestFormatParsersRefuseBombsAndKeepBrokenDocuments: an entity bomb is
+// refused by name; a document its parser cannot fully read keeps what it holds
+// under a gap or note naming the break, never a failure of the whole document.
+func TestFormatParsersRefuseBombsAndKeepBrokenDocuments(t *testing.T) {
 	converter := pinnedPythonConverter(t)
 	dir := t.TempDir()
 	bomb := `<?xml version="1.0"?><!DOCTYPE article [<!ENTITY a "lol"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;">` +
 		`<!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;">]><article dtd-version="1.2"><body><p>&c;</p></body></article>`
-	for _, tc := range []struct{ kind, body, want string }{
-		{"jats", bomb, "entity bomb"},
-		{"feed", strings.Replace(bomb, "article", "rss", 2), "entity bomb"},
-		{"feed", "<?xml version=\"1.0\"?><rss version=\"2.0\"><chan", "broken or empty feed"},
-	} {
-		document := filepath.Join(dir, "input."+tc.kind)
-		if err := os.WriteFile(document, []byte(tc.body), 0o600); err != nil {
+	write := func(name, body string) string {
+		document := filepath.Join(dir, name)
+		if err := os.WriteFile(document, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		got, err := converter.Convert(context.Background(), Request{Path: document, Kind: tc.kind})
-		if !errors.Is(err, ErrConverterFailed) || !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("%s: want a failure naming %q, got markdown %q, err %v", tc.kind, tc.want, got.Markdown, err)
+		return document
+	}
+	for _, tc := range []struct{ kind, body string }{
+		{"jats", bomb},
+		{"feed", strings.Replace(bomb, "article", "rss", 2)},
+	} {
+		got, err := converter.Convert(context.Background(), Request{Path: write("bomb."+tc.kind, tc.body), Kind: tc.kind})
+		if !errors.Is(err, ErrConverterFailed) || !strings.Contains(err.Error(), "entity bomb") {
+			t.Errorf("%s: want a failure naming the entity bomb, got markdown %q, err %v", tc.kind, got.Markdown, err)
+		}
+	}
+	for _, tc := range []struct{ name, kind, body, want string }{
+		{"broken feed", "feed", "<?xml version=\"1.0\"?><rss version=\"2.0\"><chan",
+			"_Converter gap: the feed parsed to no title and no items (Couldn't find end of Start Tag chan line 1); " +
+				"the raw text is shown_\n\n<?xml version=\"1.0\"?><rss version=\"2.0\"><chan\n"},
+		{"malformed JATS", "jats", `<article><front><article-meta><title-group><article-title>Kept title</article-title>` +
+			`</title-group><contrib-group><contrib contrib-type="author"><name><surname>Doe</surname>` +
+			`<given-names>Ann</given-names></name></contrib><contrib contrib-type="editor"><name><surname>Roe</surname>` +
+			`<given-names>Bo</given-names></name></contrib><contrib><name><surname>Poe</surname></name></contrib>` +
+			`</contrib-group></article-meta></front><body><p>First paragraph kept.</p><p>Broken <b></p></body></article>`,
+			"# Kept title\n\nAuthors: Doe Ann\n\nContributors: Roe Bo (editor), Poe (contributor)\n\n" +
+				"First paragraph kept.\n\nBroken\n\n_Converter note: the XML is malformed (Opening and ending tag mismatch: " +
+				"b line 1 and p, line 1); the article was read as recovered and text past the break may be missing_\n"},
+		{"unparsable notebook", "ipynb", "{\"cells\": [\n",
+			"_Converter gap: the notebook JSON could not be parsed (Expecting value: line 2 column 1 (char 12)); " +
+				"the raw text is shown_\n\n{\"cells\": [\n"},
+		{"notebook with no cells", "ipynb", "{\"metadata\": {}}\n",
+			"_Converter gap: the notebook has no cells list; the raw text is shown_\n\n{\"metadata\": {}}\n"},
+		{"notebook heading cell", "ipynb", `{"cells":[{"cell_type":"heading","source":["Old heading"]},` +
+			`{"cell_type":"markdown","source":["Body text"]}]}`,
+			"_Converter note: a cell of type 'heading' is kept as raw text_\n\nOld heading\n\nBody text\n"},
+		{"captions with no cues", "vtt", "WEBVTT\n\nSpoken words with no timing\n",
+			"_Converter gap: the captions file has no timed cues (no '-->' line); the raw text is shown_\n\n" +
+				"WEBVTT\n\nSpoken words with no timing\n"},
+		{"RIS with no records", "ris", "AU  - Doe, Ann\nloose words\n",
+			"_Converter gap: the RIS file has no records (no 'TY  - ' line); the raw text is shown_\n\n" +
+				"AU  - Doe, Ann\nloose words\n"},
+		{"RIS stray lines", "ris", "Exported list\nTY  - JOUR\nright after the type\nTI  - Kept title\nER  - \n",
+			"RIS: 1 records\n\n## Kept title\n\n- TY: JOUR\n\n_Converter note: 2 lines sit outside any record's tags; " +
+				"they are kept as read_\n\nExported list\nright after the type\n\n" +
+				"_Converter note: RIS and BibTeX parsing is untested on messy exports_\n"},
+		{"MHTML with a text part only", "mhtml", "MIME-Version: 1.0\nContent-Type: multipart/related; boundary=\"b\"\n\n" +
+			"--b\nContent-Type: text/plain\nContent-Location: https://example.test/note.txt\n\nPlain archived words\n" +
+			"--b\nContent-Type: image/png\nContent-Location: https://example.test/a.png\n\nPNG\n--b--\n",
+			"_Converter note: the MHTML archive has no text/html part; its text/plain part is shown_\n\n" +
+				"Plain archived words\n\n## Archived resources, not inlined\n\n- https://example.test/a.png (image/png)\n"},
+		{"MHTML with no text part", "mhtml", "MIME-Version: 1.0\nContent-Type: multipart/related; boundary=\"b\"\n\n" +
+			"--b\nContent-Type: image/png\nContent-Location: https://example.test/a.png\n\nPNG\n--b--\n",
+			"_Converter gap: the MHTML archive has no text part (1 parts); its parts are listed_\n\n" +
+				"## Archived resources, not inlined\n\n- https://example.test/a.png (image/png)\n"},
+		{"email with no body part", "eml", "From: sender@example.com\nSubject: Invite\nContent-Type: text/calendar\n\n" +
+			"BEGIN:VCALENDAR\nEND:VCALENDAR\n",
+			"# Invite\n\n- From: sender@example.com\n\n" +
+				"_Converter gap: the email has no plain or HTML body part (parts: text/calendar)_\n"},
+		{"web archive of an image", "webarchive", `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>WebMainResource</key><dict>
+<key>WebResourceData</key><data>iVBORw0K</data>
+<key>WebResourceMIMEType</key><string>image/png</string>
+<key>WebResourceURL</key><string>https://example.test/figure.png</string>
+</dict><key>WebSubresources</key><array><dict>
+<key>WebResourceURL</key><string>https://example.test/style.css</string>
+<key>WebResourceMIMEType</key><string>text/css</string>
+</dict></array></dict></plist>
+`,
+			"_Converter gap: the web archive's main resource is image/png, not a page the harvester reads_\n\n" +
+				"## Archived resources, not inlined\n\n- https://example.test/style.css (text/css)\n"},
+		{"kind no converter reads", "unknownkind", "plain words\n",
+			"_Converter gap: no converter reads kind 'unknownkind'; the raw text is shown_\n\nplain words\n"},
+		{"Windows-1252 HTML", "html", "<html><head><title>Caf\xe9</title></head><body><article><p>" +
+			"Le caf\xe9 cr\xe8me co\xfbte quatre euros \x96 un prix que personne ne conteste dans ce quartier tranquille." +
+			"</p></article></body></html>",
+			"Le café crème coûte quatre euros – un prix que personne ne conteste dans ce quartier tranquille.\n"},
+	} {
+		got, err := converter.Convert(context.Background(), Request{Path: write("broken."+tc.kind, tc.body), Kind: tc.kind})
+		if err != nil || got.Markdown != tc.want {
+			t.Errorf("%s: markdown %q, err %v; want %q", tc.name, got.Markdown, err, tc.want)
 		}
 	}
 }

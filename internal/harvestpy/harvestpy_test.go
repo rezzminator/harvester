@@ -421,6 +421,58 @@ func TestProvisionFailureRestoresQuarantinedEnvironment(t *testing.T) {
 	}
 }
 
+// TestProvisionKeepsThePublishedEnvironmentWhenItsQuarantineStays: once
+// current names the rebuilt tree, the quarantined one it replaced is a
+// superseded env; failing to remove it never takes the live tree down with it.
+func TestProvisionKeepsThePublishedEnvironmentWhenItsQuarantineStays(t *testing.T) {
+	restoreGOOS, restoreRemove := pruneHostGOOS, pruneRemoveAll
+	pruneHostGOOS = "linux"
+	pruneRemoveAll = func(path string) error {
+		if strings.Contains(filepath.Base(path), ".repair-") {
+			return errors.New("permission denied")
+		}
+		return os.RemoveAll(path)
+	}
+	t.Cleanup(func() { pruneHostGOOS, pruneRemoveAll = restoreGOOS, restoreRemove })
+	root := t.TempDir()
+	platform := Platform{GOOS: "linux", GOARCH: "amd64"}
+	targets, cache := fakeProvisionInputs(t, root, platform)
+	desired := desiredTestDigest(platform, targets[platform])
+	envRoot := filepath.Join(root, "env", platform.String())
+	final := filepath.Join(envRoot, desired)
+	if err := os.MkdirAll(final, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(final, "old-state"), []byte("quarantined\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(desired, RuntimeRoot(root, platform)); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := provisionWithTargets(context.Background(), ProvisionOptions{
+		Root: root, Cache: cache, Platform: platform, ProcRoot: t.TempDir(),
+		Run: fakeProvisionRun(t, false),
+		Smoke: func(context.Context, Runtime) (map[string]any, error) {
+			return map[string]any{"imports": map[string]any{}, "conversion": map[string]any{"ok": true}}, nil
+		},
+	}, targets)
+	if err != nil {
+		t.Fatalf("provision over a quarantine that cannot be removed: %v", err)
+	}
+	digest, err := ReadEnvironmentDigest(filepath.Join(RuntimeRoot(root, platform), "environment.json"))
+	if err != nil || digest.Digest != desired || digest.State != provisionStateReady {
+		t.Fatalf("live environment = %+v, %v; want %s ready", digest, err, desired)
+	}
+	if len(result.Pruned.Failed) != 1 || result.Pruned.Failed[0].Err.Error() != "permission denied" {
+		t.Fatalf("prune failures = %+v, want the quarantine's one permission denied", result.Pruned.Failed)
+	}
+	quarantine := result.Pruned.Failed[0].Path
+	if body, readErr := os.ReadFile(filepath.Join(quarantine, "old-state")); readErr != nil || string(body) != "quarantined\n" {
+		t.Fatalf("quarantine %s = %q, %v; want the old tree kept", quarantine, body, readErr)
+	}
+}
+
 func TestInspectAndCheckReportIncompleteProvisioning(t *testing.T) {
 	root := t.TempDir()
 	platform := Platform{GOOS: "linux", GOARCH: "amd64"}

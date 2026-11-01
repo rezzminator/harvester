@@ -42,7 +42,7 @@ open(%q, "w").write(str(child.pid))
 open(%q, "w").write(str(os.getpid()))
 for line in sys.stdin:
     request = json.loads(line)
-    print(json.dumps({"id": request["id"], "ok": True, "markdown": "fixture inherited stderr conversion", "kind": "pdf", "features": {}}), flush=True)
+    print(json.dumps({"id": request["id"], "ok": True, "markdown": "fixture inherited stderr conversion"}), flush=True)
 `, childFile, workerFile)
 	if err := os.WriteFile(filepath.Join(project, "converter.py"), []byte(script), 0o600); err != nil {
 		t.Fatal(err)

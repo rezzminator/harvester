@@ -318,7 +318,7 @@ func (h *Harvester) fetchProviderArtifactWithPolicy(
 	}
 	converted, err := h.convertFetchedContent(ctx, kind, fileURL, response.body)
 	if err != nil {
-		if kind != kindPDF || !emptyPDFConversionError(err) {
+		if kind != kindPDF || !emptyConversionError(err) {
 			return providerResult(
 				source,
 				provider,
@@ -379,7 +379,10 @@ func (h *Harvester) fetchProviderArtifactWithPolicy(
 	return stored
 }
 
-func emptyPDFConversionError(err error) bool {
+// emptyConversionError reports whether err is a converter that ran and read
+// the document blank: harvestpy's ErrConverterEmpty, matched by its EMPTY-text
+// wording: harvestpy's own tests import this package, so it cannot import harvestpy.
+func emptyConversionError(err error) bool {
 	if err == nil {
 		return false
 	}

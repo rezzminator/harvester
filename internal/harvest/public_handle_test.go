@@ -58,12 +58,16 @@ func TestPublicCandidatesDoNotTreatUnsafeDOIURLsOrISBNLocationsAsIdentity(t *tes
 	setHarvestTestJail(t)
 	withPublicDNSForProviderTest(t)
 	h := mustNew(t, Options{CacheDir: t.TempDir()})
+	// An unsafe or non-public location gets no handle and is left out; the
+	// candidates beside it keep theirs.
 	for _, source := range []string{
 		"ftp://doi.org/10.1234/public.boundary",
 		"https://user:pass@doi.org/10.1234/public.boundary",
+		"http://192.168.1.20/mirror/public.boundary.pdf",
 	} {
-		if _, err := h.PublicCandidates([]Candidate{{URL: source}}); err == nil {
-			t.Fatalf("unsafe DOI URL %q was accepted as an identity handle", source)
+		got, err := h.PublicCandidates([]Candidate{{URL: source, Title: "Unsafe"}, {URL: "10.1234/kept", Title: "Kept"}})
+		if err != nil || len(got) != 1 || got[0].URL != "10.1234/kept" || got[0].Title != "Kept" {
+			t.Fatalf("PublicCandidates(%q beside a DOI) = %#v, %v; want only the DOI candidate, no error", source, got, err)
 		}
 	}
 	got, err := h.PublicCandidates([]Candidate{{URL: "https://repository.test/isbn/9780306406157"}})

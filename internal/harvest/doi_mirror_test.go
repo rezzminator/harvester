@@ -355,6 +355,40 @@ func TestPMIDWithoutPMCIDFallsBackToDOIMirror(t *testing.T) {
 	}
 }
 
+// TestPMIDWithoutPMCIDKeepsThePubMedRecord: a PMID with no open-access PMCID
+// and no mirror to try is read as its PubMed record (title, abstract), a thin
+// copy naming why, never a bare error.
+func TestPMIDWithoutPMCIDKeepsThePubMedRecord(t *testing.T) {
+	withPublicDNSForProviderTest(t)
+	abstract := strings.Repeat("Gauge fields were measured across the lattice in every season. ", 12)
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.Contains(r.URL.Path, "/idconv/api/"):
+			return jsonResponse(r, `{"records":[{"pmid":"1234567"}]}`), nil
+		case r.URL.Host == "pubmed.ncbi.nlm.nih.gov" && r.URL.Path == "/1234567/":
+			return response(r, http.StatusOK, "text/html",
+				"<html><head><title>Gauge notes</title></head><body><main><h1>Gauge notes</h1><p>"+
+					abstract+"</p></main></body></html>"), nil
+		}
+		return response(r, http.StatusNotFound, "application/json", `{}`), nil
+	})}
+	h := mustNew(t, Options{
+		CacheDir:  t.TempDir(),
+		Client:    client,
+		Chrome:    fixtureTwin(client),
+		OA:        fixtureTwin(client),
+		Converter: &fakeConverter{},
+	})
+
+	got := h.fetchKnownID(context.Background(), "1234567", IdentifierPMID, FetchOptions{})
+	const wantPartial = "the open-access copy at https://pubmed.ncbi.nlm.nih.gov carries no full text " +
+		"(0 body sections, 0 characters of body text), and no other candidate carried full text"
+	if got.Error != "" || got.Partial != wantPartial || !strings.Contains(got.Content, strings.TrimSpace(abstract)) {
+		t.Fatalf("PMID record read = error %q partial %q content %q, want the abstract with partial %q",
+			got.Error, got.Partial, got.Content, wantPartial)
+	}
+}
+
 // TestDOIMirrorLookupSplitsRequestFailureFromResponseFailure: a transport
 // failure (no response ever arrived) and a response failure (a response
 // arrived and then its body failed to read/decode/fit the byte ceiling) are

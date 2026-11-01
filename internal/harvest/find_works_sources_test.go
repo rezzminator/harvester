@@ -3,6 +3,7 @@ package harvest
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -219,4 +220,28 @@ func sourceNamed(found WorksFound, name string) WorkSource {
 		}
 	}
 	return WorkSource{}
+}
+
+// TestSemanticScholarPaperWithNoFetchableIDKeepsItsPage: a matching paper with
+// no DOI, arXiv id or open PDF is listed by its Semantic Scholar page.
+func TestSemanticScholarPaperWithNoFetchableIDKeepsItsPage(t *testing.T) {
+	t.Parallel()
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "api.semanticscholar.org" || !strings.Contains(r.URL.RawQuery, "url") {
+			t.Errorf("request %s, want a Semantic Scholar search asking for the url field", r.URL)
+		}
+		return response(r, http.StatusOK, "application/json", `{"data":[
+{"title":"Deep learning","year":2015,"externalIds":{"DOI":"10.1038/nature14539"}},
+{"title":"Deep learning workshop notes","year":2016,"url":"https://www.semanticscholar.org/paper/abc123","externalIds":{}},
+{"title":"Deep learning","year":2017,"externalIds":{}}]}`), nil
+	})}
+	got := (&Resolver{}).findSemanticScholar(context.Background(), client, "Deep learning", 8)
+	handles := make([]string, 0, len(got))
+	for _, candidate := range got {
+		handles = append(handles, candidate.URL)
+	}
+	want := []string{"10.1038/nature14539", "https://www.semanticscholar.org/paper/abc123"}
+	if !slices.Equal(handles, want) {
+		t.Fatalf("handles = %q, want %q", handles, want)
+	}
 }

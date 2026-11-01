@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rezzminator/harvester/internal/clock"
+	"github.com/rezzminator/harvester/internal/obs"
 )
 
 // provisionLockName is the advisory lock one environment root is converged
@@ -57,6 +58,18 @@ func lockProvisionRoot(ctx context.Context, root string) (release func() error, 
 		}
 		return releaseErr
 	}, nil
+}
+
+// provisionLock takes a converge's lock; a test swaps it to fail the release.
+var provisionLock = lockProvisionRoot
+
+// releaseProvisionRoot drops a converge's lock. A failed unlock or close is
+// logged, never the converge's result: closing the descriptor drops the flock
+// anyway, and the environment the converge published stays live.
+func releaseProvisionRoot(ctx context.Context, release func() error) {
+	if err := release(); err != nil {
+		obs.Logger(obs.Component(ctx, "harvestpy")).Warn("harvestpy.provision.unlock", obs.FieldErr, err.Error())
+	}
 }
 
 // provisionLockPoll is how often a waiting holder retries the lock.

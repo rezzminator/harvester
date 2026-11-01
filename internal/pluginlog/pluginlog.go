@@ -31,6 +31,14 @@ const (
 
 var levelFiles = map[string]string{"error": "errors.jsonl", "warning": "warnings.jsonl", "info": "info.jsonl", "debug": "debug.jsonl"}
 
+// levelFile is the file a row of level goes to: a level naming none keeps its row, in warnings.jsonl.
+func levelFile(level string) string {
+	if name, ok := levelFiles[level]; ok {
+		return name
+	}
+	return "warnings.jsonl"
+}
+
 // Row is one level row. A Logger fills an empty TS with the writing time and an empty Plugin with its own name.
 // Detail carries operational metadata only, never prompt, transcript or tool bodies.
 type Row struct {
@@ -68,9 +76,6 @@ func OnScreen(level string) bool {
 // Encode renders one row with its newline, at most RowMaxBytes: an oversized row's Detail becomes
 // {truncated, bytes} (bytes: the whole row's), then Msg, Session, Where, Event and Plugin shorten in that order.
 func Encode(row Row) ([]byte, error) {
-	if _, ok := levelFiles[row.Level]; !ok {
-		return nil, fmt.Errorf("plugin log invalid level: %q", row.Level)
-	}
 	raw, err := marshal(row)
 	if err != nil || len(raw) <= RowMaxBytes {
 		return raw, err
@@ -229,7 +234,7 @@ func (l *Logger) write(entry held) error {
 	if err := os.MkdirAll(l.dir, 0o700); err != nil {
 		return fmt.Errorf("create the log directory: %w", err)
 	}
-	name := levelFiles[entry.row.Level]
+	name := levelFile(entry.row.Level)
 	path := filepath.Join(l.dir, name)
 	rotated, err := rotate(path)
 	if err != nil {

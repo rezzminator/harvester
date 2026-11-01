@@ -141,6 +141,23 @@ func TestIMDbReviewsLoadEveryReview(t *testing.T) {
 	}
 }
 
+// TestIMDbReviewWithNoIdIsKept: a review the API serves with no id is not a
+// reason to refuse its page: it renders under an unknown id with the title's
+// review list as its link, and every other review renders as before.
+func TestIMDbReviewWithNoIdIsKept(t *testing.T) {
+	t.Parallel()
+	site := newIMDbSite(t)
+	site.answers[""] = strings.Replace(site.answers[""], `"id":"rw9000002",`, ``, 1)
+	result := site.harvester(t).FetchWithOptions(context.Background(), imdbURL, FetchOptions{Refresh: true})
+	want := "rw9000001,unknown id,rw9000003,rw9000004"
+	if got := strings.Join(socialRendered(result.Content), ","); got != want || result.Partial != "" {
+		t.Fatalf("reviews are wrong: got %v, want %v, partial=%q\n%.2500s", got, want, result.Partial, result.Content)
+	}
+	if line := "- **ReviewerTwo** · 2005-11-21 · [unknown id](https://www.imdb.com/title/tt9000001/reviews/)"; !strings.Contains(result.Content, line) {
+		t.Fatalf("the artifact lacks %q:\n%.2500s", line, result.Content)
+	}
+}
+
 // TestIMDbReviewsNotServedNameTheGap: when the API's list ends before its
 // stated total, the rest are named with the count, and the artifact is
 // partial; a review page that fails to load is named as well.

@@ -310,29 +310,100 @@ func TestBrowserPolicyDenialIsNotAnOutage(t *testing.T) {
 	}
 }
 
-// TestBrowserConverterOutageIsNamed pins review-2 B5: the browser BEAT the
-// wall and rendered the article, then the conversion step failed. The user
-// must hear "tool outage", never the definitive verdict that the wall won.
-func TestBrowserConverterOutageIsNamed(t *testing.T) {
+// TestBrowserConverterAnswerReachesTheFailure pins review-2 B5 and the
+// converter's own words: the browser BEAT the wall and rendered the article,
+// then the conversion step failed (a tool outage quoting the converter, never
+// the wall winning), or read the render blank (an empty page quoting what it
+// read, never an outage). The browser's answer is the latest evidence: the
+// public failure quotes the converter, never "the real-browser rung met the
+// wall too", and carries no challenge flag; the internal failure leads with the
+// static rungs' status, never the challenge, and quotes the converter once.
+func TestBrowserConverterAnswerReachesTheFailure(t *testing.T) {
 	t.Parallel()
+	const source = "https://blocked.example.test/article"
+	const rungs = " Rungs tried: direct, chrome-impersonation, jina, defuddle, browser, wayback."
 	rendered := "<html><body><h1>Recovered article</h1>" + strings.Repeat(
 		"real rendered evidence ",
 		100,
 	) + "</body></html>"
-	spy := &browserSpyConverter{
-		html:   rendered,
-		status: http.StatusOK,
-		convertFn: func(_ context.Context, _, _ string, _ []byte) (string, error) {
-			return "", errors.New("conversion worker not provisioned")
-		},
+	const emptyText = `harvestpy worker returned empty markdown (EMPTY-text conversion); ` +
+		`the converter read author "A. Writer", title "Quarterly Report"`
+	forbidden := func(t *testing.T, converter Converter) *Harvester {
+		t.Helper()
+		refused := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			return response(request, http.StatusForbidden, "text/html", "<html>Forbidden</html>"), nil
+		})
+		missing := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			return response(request, http.StatusNotFound, "application/json", `{}`), nil
+		})
+		return mustNew(t, Options{
+			CacheDir: t.TempDir(), Client: &http.Client{Transport: refused}, Chrome: &http.Client{Transport: refused},
+			Jina: &http.Client{Transport: missing}, OA: &http.Client{Transport: missing},
+			Converter: converter, BrowserRung: browserOn(),
+		})
 	}
-	h := wallHarvester(t, spy, browserOn())
-	result := h.Fetch(context.Background(), "https://blocked.example.test/article")
-	if !strings.Contains(result.Error, "conversion step then failed") {
-		t.Fatalf("converter outage collapsed into another arm: %q", result.Error)
-	}
-	if strings.Contains(result.Error, "still could not pass") {
-		t.Fatalf("a converter outage was asserted as the wall winning: %q", result.Error)
+	const publicRungs = " Rungs tried: direct, chrome-impersonation, jina, defuddle, browser, wayback."
+	const publicNext = " Find another copy at another URL (search_web, when configured) and read it with read (urls), " +
+		"or with search_literature and read (publications) if it is a scholarly work."
+	// The browser beat the wall, so the lead is the static rungs' status, never the challenge.
+	const forbiddenLead = source + " returned HTTP 403 (forbidden) — likely a bot-block or rate limit. Use " +
+		"`search_literature` if it is a scholarly title, or find an alternative copy at another URL. "
+	const outageNote = "The real-browser rung DID run and got real content past the wall, but the conversion " +
+		"step then failed on this server — a tool outage, not proof of IP reputation: retry, or find an " +
+		"alternative copy with search_literature or another URL. The converter's error: conversion worker " +
+		"not provisioned."
+	const retrievedLead = "The source was retrieved but yielded no readable content (empty after extraction) — " +
+		"the converter ran and read it blank: "
+	for _, test := range []struct {
+		name       string
+		harvester  func(*testing.T, Converter) *Harvester
+		err        string
+		wantError  string
+		wantKind   string
+		wantPublic string
+	}{
+		{"outage", func(t *testing.T, c Converter) *Harvester { return wallHarvester(t, c, browserOn()) },
+			"conversion worker not provisioned", forbiddenLead + outageNote + rungs,
+			errorKindConversion, "The document was retrieved but the converter could not read it: conversion worker not provisioned." + publicRungs + publicNext},
+		{"empty", func(t *testing.T, c Converter) *Harvester { return wallHarvester(t, c, browserOn()) },
+			emptyText, forbiddenLead +
+				"The real-browser rung DID run and returned an EMPTY page — a completed attempt with nothing " +
+				"usable, not an outage. The converter ran and read the document as blank — it converted EMPTY, " +
+				"not a tool outage: " + emptyText + "." + rungs,
+			errorKindEmpty, retrievedLead + emptyText + "." + publicRungs + publicNext},
+		{"outage after a 403", forbidden, "conversion worker not provisioned", forbiddenLead + outageNote + rungs,
+			errorKindConversion, "The document was retrieved but the converter could not read it: conversion worker not provisioned." + publicRungs + publicNext},
+		{"empty after a 403", forbidden, emptyText, forbiddenLead +
+			"The real-browser rung DID run and returned an EMPTY page — a completed attempt with nothing " +
+			"usable, not an outage. The converter ran and read the document as blank — it converted EMPTY, " +
+			"not a tool outage: " + emptyText + "." + rungs,
+			errorKindEmpty, retrievedLead + emptyText + "." + publicRungs + publicNext},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			spy := &browserSpyConverter{
+				html:   rendered,
+				status: http.StatusOK,
+				// Only the browser's render reaches the failing converter: the
+				// walled static bodies convert without an answer to quote.
+				convertFn: func(_ context.Context, _, _ string, body []byte) (string, error) {
+					if !strings.Contains(string(body), "Recovered article") {
+						return "", nil
+					}
+					return "", errors.New(test.err)
+				},
+			}
+			got := test.harvester(t, spy).Fetch(context.Background(), source)
+			if got.Error != test.wantError || got.converterError != test.err {
+				t.Fatalf("Fetch() error = %q converterError %q,\nwant %q converterError %q",
+					got.Error, got.converterError, test.wantError, test.err)
+			}
+			public := PublicFailure(source, got)
+			if public.ErrorKind != test.wantKind || public.Challenge || public.Error != test.wantPublic {
+				t.Fatalf("PublicFailure() = kind %q challenge %v error %q,\nwant kind %q challenge false error %q",
+					public.ErrorKind, public.Challenge, public.Error, test.wantKind, test.wantPublic)
+			}
+		})
 	}
 }
 

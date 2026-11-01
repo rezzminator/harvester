@@ -76,6 +76,27 @@ func TestRenderReadItemLegacyFailureKindsNameTheSameRecovery(t *testing.T) {
 	}
 }
 
+// TestRenderReadItemKeepsAShortPageThatNamesAChallengeWord: a 200 page under
+// the thin-page bound that mentions Cloudflare or a captcha is the page, shown;
+// the same words on an error page word its failure as a challenge.
+func TestRenderReadItemKeepsAShortPageThatNamesAChallengeWord(t *testing.T) {
+	body := "Our status page: the CDN is Cloudflare and the form has a captcha."
+	for _, tc := range []struct {
+		status int
+		want   string
+		failed bool
+	}{
+		{200, "=== [1/1] https://fixture.example/source\n" + body, false},
+		{403, "=== [1/1] https://fixture.example/source\nerror: ", true},
+	} {
+		got, failed := RenderReadItem(1, 1, "https://fixture.example/source",
+			harvest.Result{HTTPStatus: tc.status, Content: body, Chars: len(body)}, ReadView{})
+		if failed != tc.failed || !tc.failed && got != tc.want || tc.failed && !strings.Contains(got, "access challenge") {
+			t.Errorf("status %d: block %q failed=%v; want failed=%v and %q", tc.status, got, failed, tc.failed, tc.want)
+		}
+	}
+}
+
 // TestRenderReadItemThinExtractionNamesSearchOnlyWhenAvailable: the "thin
 // extraction" (JS-rendered/bot-blocked, no readable content) message
 // recommends `search_web` only when a backend is configured, and

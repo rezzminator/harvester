@@ -82,6 +82,32 @@ func (site *lobstersSite) roundTrip(request *http.Request) (*http.Response, erro
 	return response(request, http.StatusNotFound, "text/html", "<html><body>not found</body></html>"), nil
 }
 
+func lobstersFixture(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/lobsters/story.html")
+	if err != nil {
+		t.Fatalf("read the captured Lobsters fixture: %v", err)
+	}
+	return string(raw)
+}
+
+func (site *lobstersSite) harvester(t *testing.T) *Harvester {
+	t.Helper()
+	missing := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return response(request, http.StatusNotFound, "application/json", `{}`), nil
+	})
+	return mustNew(t, Options{
+		CacheDir:    t.TempDir(),
+		Client:      &http.Client{Transport: roundTripFunc(site.roundTrip)},
+		Chrome:      &http.Client{Transport: roundTripFunc(site.roundTrip)},
+		Jina:        &http.Client{Transport: missing},
+		OA:          &http.Client{Transport: missing},
+		Converter:   &browserSpyConverter{},
+		BrowserRung: browserOff(),
+		Clock:       newPacingClock(),
+	})
+}
+
 // lobstersCommentHeaderRe reads a rendered comment's heading: its indent and
 // id.
 var lobstersCommentHeaderRe = regexp.MustCompile(
@@ -95,24 +121,8 @@ var lobstersCommentHeaderRe = regexp.MustCompile(
 // complete (no image partial), and a second harvest is identical.
 func TestLobstersStoryRendersCommentsWithoutAvatarsOrVoteLinks(t *testing.T) {
 	t.Parallel()
-	raw, err := os.ReadFile("testdata/lobsters/story.html")
-	if err != nil {
-		t.Fatalf("read the captured Lobsters fixture: %v", err)
-	}
-	site := &lobstersSite{page: string(raw)}
-	missing := roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		return response(request, http.StatusNotFound, "application/json", `{}`), nil
-	})
-	h := mustNew(t, Options{
-		CacheDir:    t.TempDir(),
-		Client:      &http.Client{Transport: roundTripFunc(site.roundTrip)},
-		Chrome:      &http.Client{Transport: roundTripFunc(site.roundTrip)},
-		Jina:        &http.Client{Transport: missing},
-		OA:          &http.Client{Transport: missing},
-		Converter:   &browserSpyConverter{},
-		BrowserRung: browserOff(),
-		Clock:       newPacingClock(),
-	})
+	site := &lobstersSite{page: lobstersFixture(t)}
+	h := site.harvester(t)
 	result := h.FetchWithOptions(context.Background(), lobstersStoryURL, FetchOptions{Refresh: true})
 	if result.Error != "" || result.Partial != "" {
 		t.Fatalf("the story is not complete: method=%q partial=%q error=%q\n%.1500s",
@@ -157,5 +167,34 @@ func TestLobstersStoryRendersCommentsWithoutAvatarsOrVoteLinks(t *testing.T) {
 	again := h.FetchWithOptions(context.Background(), lobstersStoryURL, FetchOptions{Refresh: true})
 	if again.Content != result.Content {
 		t.Fatal("a second harvest of the same story differs")
+	}
+}
+
+// TestLobstersStoryWithNoIdsIsKept: a story element with no data-shortid is
+// not declined: the story renders with the requested address as its thread
+// link; a comment with no data-shortid renders without a permalink under an
+// unknown id, and its reply stays nested one level below it.
+func TestLobstersStoryWithNoIdsIsKept(t *testing.T) {
+	t.Parallel()
+	page := strings.Replace(lobstersFixture(t), `data-shortid="mroowi"`, ``, 1)
+	page = strings.Replace(page, `data-shortid="ke4wwa"`, ``, 1)
+	result := (&lobstersSite{page: page}).harvester(t).FetchWithOptions(context.Background(), lobstersStoryURL,
+		FetchOptions{Refresh: true})
+	if result.Error != "" || result.Partial != "" {
+		t.Fatalf("the story is not complete: method=%q partial=%q error=%q\n%.1500s",
+			result.Method, result.Partial, result.Error, result.Content)
+	}
+	for _, want := range []string{
+		"**Thread:** " + lobstersStoryURL + "  \n",
+		"**Comments:** 30 stated · 30 loaded (3 comment(s) removed, placeholders without text, not counted)\n",
+		" · #unknown id\n",
+		"\n  - **",
+	} {
+		if !strings.Contains(result.Content, want) {
+			t.Fatalf("the artifact lacks %q:\n%.2500s", want, result.Content)
+		}
+	}
+	if got := strings.Count(result.Content, "· #unknown id"); got != 1 {
+		t.Fatalf("%d comments render under an unknown id, want 1\n%.2500s", got, result.Content)
 	}
 }

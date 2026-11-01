@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -256,17 +257,33 @@ func isPrivateMetadataPath(path, root string) bool {
 	return false
 }
 
-func readBoundedFile(path string, limit int64) (data []byte, returnErr error) {
-	if limit <= 0 {
-		limit = publicReadLimit
-	}
+func readBoundedFile(path string, limit int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
+	return readBounded(f, path, limit)
+}
+
+// boundedFile is the open artifact readBounded reads: an *os.File.
+type boundedFile interface {
+	io.ReadCloser
+	Stat() (fs.FileInfo, error)
+}
+
+func readBounded(f boundedFile, path string, limit int64) (data []byte, returnErr error) {
+	if limit <= 0 {
+		limit = publicReadLimit
+	}
 	defer func() {
-		if err := f.Close(); err != nil {
+		err := f.Close()
+		switch {
+		case err == nil:
+		case returnErr != nil:
 			returnErr = errors.Join(returnErr, fmt.Errorf("close artifact %s: %w", path, err))
+		default:
+			// a read-only close after a whole read loses nothing: the data stands
+			log.Printf("harvest: close artifact %s after a whole read: %v", path, err)
 		}
 	}()
 	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
@@ -277,7 +294,7 @@ func readBoundedFile(path string, limit int64) (data []byte, returnErr error) {
 	} else if info.Size() > limit {
 		return nil, errors.New("artifact exceeds public size limit")
 	}
-	data, err = io.ReadAll(io.LimitReader(f, limit+1))
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return nil, err
 	}

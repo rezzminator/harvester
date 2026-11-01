@@ -23,7 +23,8 @@ import (
 var linkedInBreakRuns = regexp.MustCompile(`(?: {2}\n){2,}`)
 
 // ldCredential is a job's education requirement: its credentialCategory, or
-// the requirement as plain text.
+// the requirement as plain text; a value of any other shape is kept as its
+// raw JSON text, never failing the posting.
 type ldCredential string
 
 func (credential *ldCredential) UnmarshalJSON(data []byte) error {
@@ -36,7 +37,10 @@ func (credential *ldCredential) UnmarshalJSON(data []byte) error {
 		Category ldText `json:"credentialCategory"`
 	}
 	if err := json.Unmarshal(data, &object); err != nil {
-		return fmt.Errorf("read a JSON-LD education requirement: %w", err)
+		obs.Logger(context.Background()).Warn("harvest: a LinkedIn job's education requirement has an unknown shape; kept as stated",
+			"value", logSource(string(data)), obs.FieldErr, err.Error())
+		*credential = ldCredential(strings.TrimSpace(string(data)))
+		return nil
 	}
 	*credential = ldCredential(object.Category)
 	return nil

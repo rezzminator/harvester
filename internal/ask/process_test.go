@@ -1,11 +1,15 @@
 package ask
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"github.com/rezzminator/harvester/internal/config"
 	"github.com/rezzminator/harvester/internal/engine"
+	"github.com/rezzminator/harvester/internal/obs"
 	"github.com/rezzminator/harvester/internal/testjail"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,11 +106,47 @@ func TestProcessReportsMissingCrashTimeoutAndEmpty(t *testing.T) {
 		})
 	}
 }
+
+// TestProcessKeepsTheAnswerWhenStderrOverflows: stderr is diagnostics; its
+// overflow is logged and the answer on stdout stands.
+func TestProcessKeepsTheAnswerWhenStderrOverflows(t *testing.T) {
+	ctx, recorder := obs.Test(t)
+	binary := filepath.Join(t.TempDir(), "fixture")
+	body := fmt.Sprintf("#!/bin/sh\ncat >/dev/null\nhead -c %d /dev/zero >&2\nprintf '%%s' '{\"result\":\"answer\"}'\n", maxCapturedOutput+1)
+	if err := testjail.WriteExecutable(binary, []byte(body), 0700); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := ResolveClaude(config.Config{Claude: config.Claude{Binary: binary}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run(ctx, AskInput{ContentFiles: []string{"source.md"}, SourceLabels: []string{"source"}, Prompt: "Question"})
+	if err != nil || result.Answer != "answer" {
+		t.Fatalf("result=%+v err=%v; want the stdout answer kept", result, err)
+	}
+	want := "claude stderr exceeded the 8388608-byte capture limit; the rest was not kept"
+	var got []string
+	for _, record := range recorder.Records() {
+		if record.Message == "ask.stderr.truncated" {
+			got = append(got, fmt.Sprint(record.Fields["reason"]))
+		}
+	}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("stderr overflow log = %q, want [%q] (log %s)", got, want, recorder.Raw())
+	}
+}
+
 func TestBoundedBufferRejectsOversizedEngineOutput(t *testing.T) {
 	var buffer boundedBuffer
 	body := []byte(strings.Repeat("x", maxCapturedOutput+1))
 	n, err := buffer.Write(body)
 	if err != nil || n != len(body) || buffer.Len() != maxCapturedOutput || !buffer.truncated {
 		t.Fatalf("n=%d len=%d truncated=%v err=%v", n, buffer.Len(), buffer.truncated, err)
+	}
+	// io.Copy is how exec fills the buffer from a pipe: it must meet the same cap.
+	var copied boundedBuffer
+	written, err := io.Copy(&copied, bytes.NewReader(body))
+	if err != nil || written != int64(len(body)) || copied.Len() != maxCapturedOutput || !copied.truncated {
+		t.Fatalf("io.Copy: written=%d len=%d truncated=%v err=%v", written, copied.Len(), copied.truncated, err)
 	}
 }

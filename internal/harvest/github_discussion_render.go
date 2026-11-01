@@ -131,9 +131,9 @@ func githubDiscussionStated(doc *html.Node) (comments, replies int, ok bool) {
 }
 
 // githubDiscussionThread reads the comments of doc in thread order, each
-// once, its replies under it; orphans counts replies whose comment is not in
+// once, its replies under it; orphans are the replies whose comment is not in
 // the page.
-func githubDiscussionThread(doc *html.Node, page *url.URL) (comments []*githubDiscussionEntry, orphans int) {
+func githubDiscussionThread(doc *html.Node, page *url.URL) (comments, orphans []*githubDiscussionEntry) {
 	byID := map[string]*githubDiscussionEntry{}
 	seen := map[string]bool{}
 	for _, node := range githubCommentElements(doc) {
@@ -161,7 +161,7 @@ func githubDiscussionThread(doc *html.Node, page *url.URL) (comments []*githubDi
 			owner.replies = append(owner.replies, comment)
 			continue
 		}
-		orphans++
+		orphans = append(orphans, comment)
 	}
 	return comments, orphans
 }
@@ -214,7 +214,12 @@ func extractGitHubDiscussion(doc *html.Node, page *url.URL) (siteExtraction, boo
 			repliesLeft[found.comment] = true
 		}
 	}
-	replies, hidden := 0, 0
+	replies, hidden := len(orphans), 0
+	for _, reply := range orphans {
+		if reply.hidden {
+			hidden++
+		}
+	}
 	for _, comment := range comments {
 		replies += len(comment.replies)
 		if comment.hidden {
@@ -230,8 +235,8 @@ func extractGitHubDiscussion(doc *html.Node, page *url.URL) (siteExtraction, boo
 				*comment.stated, len(comment.replies)))
 		}
 	}
-	if orphans > 0 {
-		gaps = append(gaps, fmt.Sprintf("%d reply(s) whose comment is not in the page, not shown", orphans))
+	if len(orphans) > 0 {
+		gaps = append(gaps, fmt.Sprintf("%d reply(s) whose comment is not in the page, shown apart", len(orphans)))
 	}
 	statedComments, statedReplies, stated := githubDiscussionStated(doc)
 	var countLine string
@@ -276,7 +281,7 @@ func extractGitHubDiscussion(doc *html.Node, page *url.URL) (siteExtraction, boo
 		out.WriteString(opening.body + "\n\n")
 	}
 	out.WriteString("---\n\n## Comments\n\n")
-	if len(comments) == 0 {
+	if len(comments) == 0 && len(orphans) == 0 {
 		out.WriteString("*No comments are loaded.*\n")
 	}
 	for _, comment := range comments {
@@ -288,6 +293,15 @@ func extractGitHubDiscussion(doc *html.Node, page *url.URL) (siteExtraction, boo
 			out.WriteString("  - " + discussion.entryHeader(reply) + "\n")
 			if reply.body != "" {
 				out.WriteString(prefixLines(reply.body, "    ", "") + "\n")
+			}
+		}
+	}
+	if len(orphans) > 0 {
+		out.WriteString("\n## Replies to a comment not in the page\n\n")
+		for _, reply := range orphans {
+			out.WriteString("- " + discussion.entryHeader(reply) + "\n")
+			if reply.body != "" {
+				out.WriteString(prefixLines(reply.body, "  ", "") + "\n")
 			}
 		}
 	}

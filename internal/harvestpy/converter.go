@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -148,14 +150,11 @@ type Request struct {
 	FullDOM bool `json:"full_dom,omitempty"`
 }
 
-// Result is one successful conversion result and its optional feature prices.
-// Meta is what the converter read ABOUT the document (title, author,
+// Result is one successful conversion result. Meta is what the converter read ABOUT the document (title, author,
 // published, site, license; transformed when the body is a rendering of the
 // source rather than its text) — never written into Markdown.
 type Result struct {
 	Markdown string            `json:"markdown"`
-	Kind     string            `json:"kind"`
-	Features FeatureStatus     `json:"features"`
 	Meta     map[string]string `json:"meta,omitempty"`
 }
 
@@ -335,8 +334,6 @@ func (converter *Converter) run(ctx context.Context, request Request) (Result, e
 	var response struct {
 		OK         bool              `json:"ok"`
 		Markdown   string            `json:"markdown"`
-		Kind       string            `json:"kind"`
-		Features   FeatureStatus     `json:"features"`
 		Meta       map[string]string `json:"meta"`
 		Error      string            `json:"error"`
 		ErrorClass string            `json:"error_class"`
@@ -348,14 +345,24 @@ func (converter *Converter) run(ctx context.Context, request Request) (Result, e
 		return Result{}, converterFailure(response.ErrorClass, response.Error, stderr)
 	}
 	if response.Markdown == "" {
-		return Result{}, ErrConverterEmpty
+		// A blank document keeps what the converter read about it, on the
+		// result and in the error a caller reads.
+		return Result{Meta: response.Meta}, emptyConversion(response.Meta)
 	}
-	return Result{
-		Markdown: response.Markdown,
-		Kind:     response.Kind,
-		Features: response.Features,
-		Meta:     response.Meta,
-	}, nil
+	return Result{Markdown: response.Markdown, Meta: response.Meta}, nil
+}
+
+// emptyConversion is ErrConverterEmpty naming what the converter read about
+// the blank document, its keys sorted; no meta is ErrConverterEmpty as it is.
+func emptyConversion(meta map[string]string) error {
+	if len(meta) == 0 {
+		return ErrConverterEmpty
+	}
+	read := make([]string, 0, len(meta))
+	for _, key := range slices.Sorted(maps.Keys(meta)) {
+		read = append(read, fmt.Sprintf("%s %q", key, meta[key]))
+	}
+	return fmt.Errorf("%w; the converter read %s", ErrConverterEmpty, strings.Join(read, ", "))
 }
 
 // converterFailure names one ok:false answer as ErrConverterFailed carrying

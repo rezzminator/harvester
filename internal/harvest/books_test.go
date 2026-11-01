@@ -256,6 +256,35 @@ func TestResolveBookAllProvidersDownReturnsError(t *testing.T) {
 	}
 }
 
+// TestResolveBookDetailFailureIsNamed: a listed OAPEN or DOAB item whose
+// detail record would not load is a failed lookup, never an empty shelf.
+func TestResolveBookDetailFailureIsNamed(t *testing.T) {
+	t.Parallel()
+	for provider, listing := range map[string]string{
+		"oapen": "library.oapen.org/rest/search",
+		"doab":  "directory.doabooks.org/rest/search",
+	} {
+		client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.URL.Host+r.URL.Path == listing:
+				return jsonResponse(r, `[{"uuid":"0b5e","name":"An Open Book"}]`), nil
+			case strings.Contains(r.URL.Path, "/rest/items/"):
+				return nil, errors.New("provider unreachable")
+			case r.URL.Host == "gutendex.com":
+				return jsonResponse(r, `{"results":[]}`), nil
+			case r.URL.Host == "openlibrary.org":
+				return jsonResponse(r, `{"docs":[]}`), nil
+			}
+			return jsonResponse(r, `[]`), nil
+		})}
+		candidates, err := (&Resolver{Client: client}).ResolveBook(context.Background(), "An Open Book")
+		want := "book lookup failed; connect: providers " + provider + ":connect"
+		if len(candidates) != 0 || err == nil || err.Error() != want {
+			t.Fatalf("%s detail failure: candidates %#v, error %v; want none and %q", provider, candidates, err, want)
+		}
+	}
+}
+
 // TestResolveBookPartialFailureStillReturnsCandidates guards the non-outage
 // path: one provider failing while another succeeds must still return that
 // provider's candidates with no error, matching ResolveDOI's own precedent.

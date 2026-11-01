@@ -167,3 +167,32 @@ func TestLemmyUnansweredPageFlagsThePartial(t *testing.T) {
 		}
 	}
 }
+
+// TestLemmyStatesNoCountAndServesACommentWithId0: a post record stating no
+// comment count still renders, its count line reading unstated, and a comment
+// served with id 0 is kept, its page accepted; neither makes the artifact
+// partial.
+func TestLemmyStatesNoCountAndServesACommentWithId0(t *testing.T) {
+	t.Parallel()
+	site := lemmySite(t, "lemmy.example", "lemmy/post-page.html")
+	site.answers["lemmy.example/api/v3/post?id="+lemmyPostID] = strings.Replace(
+		site.answers["lemmy.example/api/v3/post?id="+lemmyPostID], `"comments": 55`, `"commentz": 55`, 1)
+	site.answers[lemmyCommentsKey("lemmy.example", 2)] = strings.Replace(
+		site.answers[lemmyCommentsKey("lemmy.example", 2)], `"id": 25456015,`, `"id": 0,`, 1)
+	result := site.harvester(t).FetchWithOptions(context.Background(), "https://lemmy.example"+lemmyPath,
+		FetchOptions{Refresh: true})
+	if result.Error != "" || result.Partial != "" {
+		t.Fatalf("the post is not complete: partial=%q error=%q\n%.1500s", result.Partial, result.Error,
+			result.Content)
+	}
+	got := socialRendered(result.Content)
+	sort.Strings(got)
+	want := strings.Split(strings.Replace(strings.Join(lemmyWant(t), ","), "25456015", "0", 1), ",")
+	sort.Strings(want)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("comments are wrong: got %d %v, want %d %v", len(got), got, len(want), want)
+	}
+	if !strings.Contains(result.Content, "**Replies:** unstated · 55 loaded\n\n") {
+		t.Fatalf("the count line is not unstated:\n%.1500s", result.Content)
+	}
+}

@@ -56,6 +56,10 @@ type socialThread struct {
 	// replies served only as an unavailable mark (a comment its author
 	// deleted), so they are named apart, never a gap.
 	unavailableUnstated bool
+	// statedUnknown: the site did not state the post's reply count. The count
+	// line reads "unstated" and nothing is reconciled against a number the
+	// site never gave.
+	statedUnknown bool
 }
 
 // render is the thread as Markdown and its partial marker ("" when every
@@ -79,6 +83,17 @@ func (thread socialThread) render() (markdown, partial string) {
 	}
 	countLine := "**Replies:** "
 	switch {
+	case thread.statedUnknown:
+		countLine += fmt.Sprintf("unstated · %d loaded", loaded)
+		if !thread.repliesRead {
+			gaps = append(gaps, "replies not read")
+		}
+		for _, state := range states {
+			countLine += fmt.Sprintf(" · %d %s", unavailable[state], state)
+			if !thread.unavailableUnstated {
+				gaps = append(gaps, fmt.Sprintf("%d repl(ies) %s", unavailable[state], state))
+			}
+		}
 	case !thread.repliesRead:
 		countLine += fmt.Sprintf("%d stated · 0 loaded", thread.post.stated)
 		if thread.post.stated > 0 {
@@ -110,6 +125,10 @@ func (thread socialThread) render() (markdown, partial string) {
 		countLine += " · gaps: " + strings.Join(gaps, "; ")
 		partial = fmt.Sprintf("%s: %d of %d stated replies loaded — %s", thread.kind, loaded, stated,
 			strings.Join(gaps, "; "))
+		if thread.statedUnknown {
+			partial = fmt.Sprintf("%s: %d replies loaded, none stated — %s", thread.kind, loaded,
+				strings.Join(gaps, "; "))
+		}
 	}
 
 	var out strings.Builder

@@ -57,8 +57,10 @@ func isQuoraQuestion(page *url.URL) bool {
 }
 
 // quoraReaderPage renders a reader's Markdown of a Quora question page as its
-// answers, reconciled; any other page, or one holding no answer card the
-// extractor knows, passes unchanged to the generic path.
+// answers, reconciled; any other page, one holding no answer card the
+// extractor knows, or one with a card whose date line it does not read (more
+// vote footers than cards read), passes unchanged to the generic path, which
+// keeps every card.
 func quoraReaderPage(source, markdown string) string {
 	page, err := url.Parse(source)
 	if err != nil {
@@ -75,8 +77,11 @@ func quoraReaderPage(source, markdown string) string {
 	}
 	title, stated := "", ""
 	var answers []quoraAnswer
-	cardStart := 0
+	cardStart, footers := 0, 0
 	for index, line := range lines {
+		if strings.HasPrefix(line, quoraFooterPrefix) {
+			footers++
+		}
 		if title == "" && strings.HasPrefix(line, "# ") {
 			title = strings.TrimPrefix(line, "# ")
 		}
@@ -91,7 +96,7 @@ func quoraReaderPage(source, markdown string) string {
 		answers = append(answers, answer)
 		cardStart = end
 	}
-	if len(answers) == 0 {
+	if len(answers) == 0 || footers > len(answers) {
 		return markdown
 	}
 	return quoraRender(title, stated, answers)
@@ -140,10 +145,13 @@ func quoraCard(lines []string, start, dateAt int, date, link string) (quoraAnswe
 	return answer, end
 }
 
+// quoraFooterPrefix opens a card's vote footer, one per card.
+const quoraFooterPrefix = "Upvote ·"
+
 // quoraCardEnds reports the first line past a card's body: its vote footer,
 // or a block Quora sets between cards.
 func quoraCardEnds(line string) bool {
-	return strings.HasPrefix(line, "Upvote ·") || line == "Related" || line == "Related questions" ||
+	return strings.HasPrefix(line, quoraFooterPrefix) || line == "Related" || line == "Related questions" ||
 		line == "Ad" || quoraAuthorLine.MatchString(line) || quoraDateLine.MatchString(line)
 }
 

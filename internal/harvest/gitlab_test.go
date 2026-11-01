@@ -163,3 +163,26 @@ func TestGitLabRecordNotLoadedServesThePage(t *testing.T) {
 		t.Fatalf("the partial marker does not name the record: %q (error %q)", result.Partial, result.Error)
 	}
 }
+
+// TestGitLabRecordWithNoNoteCountRendersTheThread: a record stating no note
+// count still holds the title, body and notes; they render, the count shown as
+// not read.
+func TestGitLabRecordWithNoNoteCountRendersTheThread(t *testing.T) {
+	t.Parallel()
+	site, _ := gitlabSite(t, "gitlab.com")
+	for key, answer := range site.answers {
+		site.answers[key] = strings.ReplaceAll(answer, `"userNotesCount": 9,`, "")
+	}
+	result := site.harvester(t).FetchWithOptions(context.Background(), "https://gitlab.com"+gitlabIssuePath,
+		FetchOptions{Refresh: true})
+	for _, text := range []string{
+		"# An issue title (#1822)",
+		"**Notes:** count not read (the record states no note count) stated · 9 loaded (1 system note(s) not shown)\n",
+		"Note 1 with `code` and **bold**.",
+	} {
+		if result.Error != "" || result.Partial != "" || !strings.Contains(result.Content, text) {
+			t.Fatalf("partial=%q error=%q, want no partial and %q in:\n%.2500s",
+				result.Partial, result.Error, text, result.Content)
+		}
+	}
+}

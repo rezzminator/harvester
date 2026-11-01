@@ -135,10 +135,12 @@ func itemFailure(label string, result harvest.Result, view ReadView) string {
 			hint,
 		)
 	}
-	// A thin HTTP error/challenge page is a failure, not a successful body.
+	// A thin HTTP error page, or one the ladder judged a challenge, is a
+	// failure, not a successful body. A challenge word in a 200 body only words
+	// an error page's failure: a real short page may name Cloudflare.
 	lowerBody := strings.ToLower(stripped)
-	challenge := strings.Contains(lowerBody, "cloudflare") || strings.Contains(lowerBody, "captcha") ||
-		strings.Contains(lowerBody, "verify you are human")
+	challenge := result.Challenge || status >= http.StatusBadRequest && (strings.Contains(lowerBody, "cloudflare") ||
+		strings.Contains(lowerBody, "captcha") || strings.Contains(lowerBody, "verify you are human"))
 	if len([]rune(stripped)) < thinPageChars && (status >= http.StatusBadRequest || challenge) {
 		return harvest.PublicFailureMessage(
 			harvest.Result{HTTPStatus: status, ErrorKind: result.ErrorKind, Challenge: challenge},

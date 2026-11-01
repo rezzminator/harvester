@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -107,14 +108,23 @@ func (runner processEngine) Run(parent context.Context, input AskInput) (AskResu
 		}
 		return AskResult{}, fmt.Errorf("%s ask canceled: %w", name, ctx.Err())
 	}
-	if stdout.truncated || stderr.truncated {
+	if stdout.truncated {
 		return AskResult{}, fmt.Errorf("%s ask failed: normalized headless output exceeded the %d-byte capture limit", name, maxCapturedOutput)
+	}
+	log := obs.Logger(ctx)
+	if stderr.truncated {
+		// stderr is diagnostics only: its overflow never costs the answer on stdout.
+		log.Warn("ask.stderr.truncated", "reason", fmt.Sprintf("%s stderr exceeded the %d-byte capture limit; the rest was not kept", name, maxCapturedOutput))
 	}
 	if runErr != nil {
 		return AskResult{}, fmt.Errorf("%s ask failed: %w; stderr tail %q; stdout tail %q", name, runErr, boundedTail(stderr.String(), 1024), boundedTail(stdout.String(), 1024))
 	}
 	output := processOutput{Stdout: stdout.String()}
-	if err := parseOutput(&output, runner.engine); err != nil {
+	err = parseOutput(&output, runner.engine)
+	for _, warning := range output.Warnings {
+		log.Warn("ask.output.partial", "reason", name+": "+warning)
+	}
+	if err != nil {
 		return AskResult{}, fmt.Errorf("%s ask failed: %w", name, err)
 	}
 	return AskResult{Answer: output.Answer, Usage: output.Usage, Duration: clock.Real.Now().Sub(started)}, nil
@@ -124,6 +134,7 @@ type processOutput struct {
 	Stdout, Answer string
 	Usage          *TokenUsage
 	IsError        bool
+	Warnings       []string // what the parse could not read and skipped, the answer kept
 }
 
 func boundedTail(value string, limit int) string {
@@ -191,4 +202,10 @@ func (buffer *boundedBuffer) Write(value []byte) (int, error) {
 		return len(value), nil
 	}
 	return buffer.Buffer.Write(value)
+}
+
+// ReadFrom shadows the embedded bytes.Buffer's, which io.Copy (exec's pipe
+// copier) would take to read past the cap: every byte goes through Write.
+func (buffer *boundedBuffer) ReadFrom(reader io.Reader) (int64, error) {
+	return io.Copy(struct{ io.Writer }{buffer}, reader)
 }

@@ -114,10 +114,14 @@ func TestQuoraReaderNoStatedCountIsNamed(t *testing.T) {
 
 func TestQuoraReaderUnknownShapeFallsThrough(t *testing.T) {
 	t.Parallel()
+	// The second card's date line is not the shape the extractor reads: its footer
+	// is then one more than the cards read, so the reader's page passes whole.
+	oddDate := strings.Replace(socialFixture(t, "quora/question.md"), "\n·[Mar 23]", "\n· [Mar 23]", 1)
 	for _, tc := range []struct{ source, page string }{
 		{"https://www.quora.com/profile/Placeholder-Author-1", socialFixture(t, "quora/question.md")},
 		{quoraURL, "# What is the meaning of life?\n\nSomething went wrong. Wait a moment and try again.\n"},
 		{"https://example.org/What-is-the-meaning-of-life", socialFixture(t, "quora/question.md")},
+		{quoraURL, oddDate},
 	} {
 		if got := quoraReaderPage(tc.source, tc.page); got != tc.page {
 			t.Errorf("%s: a page the extractor cannot read must pass unchanged, got:\n%s", tc.source, got)

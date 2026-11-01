@@ -395,7 +395,9 @@ func (r *Resolver) ResolvePMID(ctx context.Context, pmid string) ([]Candidate, e
 		return nil, err
 	}
 	if len(data.Records) == 0 || data.Records[0].PMCID == "" {
-		return nil, fmt.Errorf("PubMed ID %s has no open-access PMCID", pmid)
+		// No open-access copy: the PubMed record (title, abstract, DOI) is
+		// the degraded candidate, kept as a thin copy when nothing better reads.
+		return []Candidate{{URL: "https://pubmed.ncbi.nlm.nih.gov/" + url.PathEscape(pmid) + "/", Source: sourcePubMed, Kind: kindHTML}}, nil
 	}
 	return r.ResolvePMCID(ctx, data.Records[0].PMCID)
 }

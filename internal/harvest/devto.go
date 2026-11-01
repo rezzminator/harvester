@@ -69,6 +69,8 @@ type devtoPage struct {
 	comments []devtoComment
 	read     bool
 	dropped  map[string]bool
+	// undecoded counts the kept answers that no longer decode.
+	undecoded int
 }
 
 // devtoArticleID reads the article id an article page names; false for any
@@ -129,6 +131,7 @@ func devtoPageOf(doc *html.Node, page *url.URL) (devtoPage, bool) {
 		if err != nil {
 			obs.Logger(context.Background()).Warn("harvest: a kept dev.to answer no longer decodes; left out",
 				"kind", nodeAttr(node, "kind"), obs.FieldErr, err.Error())
+			state.undecoded++
 		}
 	}
 	return state, true
@@ -186,8 +189,6 @@ func checkDevto(kind string, id int, body []byte, contentType string) error {
 			return notJSON
 		case article.ID != id:
 			return fmt.Errorf("answered by the record of article %d, not %d", article.ID, id)
-		case article.CommentsCount == nil:
-			return fmt.Errorf("answered by a record of article %d stating no comment count", id)
 		}
 		return nil
 	}
@@ -195,38 +196,34 @@ func checkDevto(kind string, id int, body []byte, contentType string) error {
 	if err := json.Unmarshal(body, &tree); err != nil {
 		return notJSON
 	}
-	var walk func([]devtoComment) error
-	walk = func(comments []devtoComment) error {
-		for index := range comments {
-			if comments[index].IDCode == "" {
-				return fmt.Errorf("answered by a comment tree holding a comment with no id")
-			}
-			if err := walk(comments[index].Children); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	return walk(tree)
+	return nil
 }
 
 // devtoPosts flattens a comment tree to socialPosts, each after its parent.
 func devtoPosts(comments []devtoComment, parent, articleURL string, out []socialPost) []socialPost {
 	for index := range comments {
 		comment := &comments[index]
+		id := comment.IDCode
+		if id == "" {
+			// A comment served with no id_code keeps its place and replies
+			// under a key of its own, and has no link of its own.
+			id = fmt.Sprintf("no-id-%d", len(out))
+		}
 		post := socialPost{
-			id: comment.IDCode, parent: parent, posted: githubPosted(comment.CreatedAt),
+			id: id, parent: parent, posted: githubPosted(comment.CreatedAt),
 			author: unknownAuthor, link: articleURL,
 		}
 		if comment.User != nil && comment.User.Username != "" {
 			post.author = "@" + comment.User.Username
-			post.link = "https://" + devtoHost + "/" + comment.User.Username + "/comment/" + comment.IDCode
+			if comment.IDCode != "" {
+				post.link = "https://" + devtoHost + "/" + comment.User.Username + "/comment/" + comment.IDCode
+			}
 		}
 		post.body = htmlMarkdown(comment.BodyHTML)
 		if post.body == devtoDeletedBody && post.author == unknownAuthor {
 			post.unavailable = socialDeleted
 		}
-		out = devtoPosts(comment.Children, comment.IDCode, articleURL, append(out, post))
+		out = devtoPosts(comment.Children, id, articleURL, append(out, post))
 	}
 	return out
 }
@@ -249,10 +246,15 @@ func extractDevtoArticle(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 	if !ok {
 		return siteExtraction{}, false
 	}
+	gap := keptAnswerGap("dev.to", state.undecoded)
 	article := state.article
 	if article == nil {
-		return siteExtraction{unrendered: "dev.to article: the article's API record was not loaded " +
-			"(its comments not read from the API; the page is stored as dev.to served it)"}, false
+		unrendered := "dev.to article: the article's API record was not loaded " +
+			"(its comments not read from the API; the page is stored as dev.to served it)"
+		if gap != "" {
+			unrendered += "; " + gap
+		}
+		return siteExtraction{unrendered: unrendered}, false
 	}
 	link := article.URL
 	if link == "" {
@@ -263,15 +265,22 @@ func extractDevtoArticle(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 		title: article.Title,
 		post: socialPost{
 			id: strconv.Itoa(article.ID), author: unknownAuthor, posted: githubPosted(article.PublishedAt),
-			link: link, body: devtoBody(article.BodyMarkdown), stated: *article.CommentsCount,
+			link: link, body: devtoBody(article.BodyMarkdown),
 		},
-		repliesRead: state.read,
+		statedUnknown: article.CommentsCount == nil,
+		repliesRead:   state.read,
 		notServed: "dev.to's comment tree did not hold them (hidden by the article's author, or shown only " +
 			"to a reader signed in)",
 		unavailableUnstated: true,
 	}
+	if article.CommentsCount != nil {
+		thread.post.stated = *article.CommentsCount
+	}
 	if article.User != nil && article.User.Username != "" {
 		thread.post.author = "@" + article.User.Username
+	}
+	if gap != "" {
+		thread.gaps = append(thread.gaps, gap)
 	}
 	if state.read {
 		thread.replies = devtoPosts(state.comments, thread.post.id, link, nil)

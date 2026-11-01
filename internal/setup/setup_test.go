@@ -54,8 +54,20 @@ func fixtureOperations(t *testing.T, root string, failHealth bool) operations {
 func TestSetupOfflineProvisionsAndRerunsIdempotently(t *testing.T) {
 	cfg, root := setupFixture(t)
 	ops := fixtureOperations(t, root, false)
-	if err := run(t.Context(), cfg, true, io.Discard, ops); err != nil {
+	provision := ops.provision
+	ops.provision = func(ctx context.Context, options harvestpy.ProvisionOptions) (harvestpy.ProvisionResult, error) {
+		result, err := provision(ctx, options)
+		result.Pruned.Failed = []harvestpy.PruneFailure{{Path: "/state/env/old.backup", Err: errors.New("permission denied")}}
+		return result, err
+	}
+	var stdout strings.Builder
+	if err := run(t.Context(), cfg, true, &stdout, ops); err != nil {
 		t.Fatal(err)
+	}
+	// A prune that failed costs only the disk it would have freed: setup goes on and says so.
+	const warning = "setup: warning: superseded environment not pruned path=/state/env/old.backup err=permission denied\n"
+	if !strings.Contains(stdout.String(), warning) || !strings.HasSuffix(stdout.String(), "daemon ready\n") {
+		t.Fatalf("setup output = %q, want the line %q and a finished setup", stdout.String(), warning)
 	}
 	if err := run(t.Context(), cfg, true, io.Discard, ops); err != nil {
 		t.Fatalf("idempotent rerun: %v", err)

@@ -74,6 +74,18 @@ func withPartial(content, reason string) string {
 	return partialMarkerPrefix + reason + "\n\n" + content
 }
 
+// withMorePartial adds reason to content's partial marker, after any reason
+// the marker already names.
+func withMorePartial(content, reason string) string {
+	if prior := partialReason(content); prior != "" {
+		reason, content = prior+"; "+reason, partialBody(content)
+	}
+	return withPartial(content, reason)
+}
+
+// landingThinGap names a bibliographic landing page kept as the answer.
+const landingThinGap = "a bibliographic landing page (abstract and metadata): no full text was found"
+
 // pageText is converted page text with the page's own copy of the partial
 // marker defused: text that opens with partialMarkerPrefix gets its ">"
 // escaped, so it reads as the page wrote it and is never read back as the

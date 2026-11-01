@@ -17,8 +17,7 @@ import (
 // conversion failure carrying the converter's words — never "could not
 // classify", never the exception class or the stderr tail.
 func TestConverterFailureReachesTheCallerByName(t *testing.T) {
-	named := "the feed parsed to no title and no items: a broken or empty feed " +
-		"(Couldn't find end of Start Tag chan line 1); a feedparser fallback on a broken feed is unmeasured"
+	named := "the XML has no root element: Start tag expected, '<' not found"
 	err := converterFailure("ValueError", "ValueError: "+named, "conversion failed for kind='feed': ValueError: "+named)
 	source := "/tmp/demo/broken-feed.xml"
 	published := harvest.PublicFailure(source, harvest.Result{Source: source, Kind: "feed", Error: err.Error()})
@@ -62,13 +61,26 @@ elif case == 'metadata':
  sys.modules['trafilatura.metadata'] = module
  stderr = io.StringIO()
  with contextlib.redirect_stderr(stderr): meta = ns['html_metadata']('<html>fixture</html>')
- assert 'metadata_error' in meta and 'RuntimeError' in meta['metadata_error'], meta
+ assert meta == {}, meta
  assert 'RuntimeError' in stderr.getvalue(), stderr.getvalue()
  # The public protocol, not just a stderr log, must carry the gap.
  globals = ns['convert'].__globals__
- globals['_CONVERTERS']['txt'] = lambda path, request: (ns['html_metadata']('<html>fixture</html>') and 'body', [])
+ globals['_CONVERTERS']['txt'] = lambda path, request: [ns['html_metadata']('<html>fixture</html>'), 'body'][1]
  output = ns['convert']({'path': sys.argv[1], 'kind': 'txt'})
  assert '_Converter gap:' in output['markdown'] and 'metadata' in output['markdown'], output
+elif case == 'cited':
+ module = types.ModuleType('trafilatura.metadata')
+ module.extract_metadata = lambda *args, **kwargs: types.SimpleNamespace(
+  author='Site Author', title='Kept Title', date='', sitename='', license='')
+ sys.modules['trafilatura'] = types.ModuleType('trafilatura')
+ sys.modules['trafilatura.metadata'] = module
+ def broken(raw): raise RuntimeError('fixture citation crash')
+ globals = ns['html_metadata'].__globals__
+ globals['_cited_authors'] = broken
+ stderr = io.StringIO()
+ with contextlib.redirect_stderr(stderr): meta = ns['html_metadata']('<html>citation_author</html>')
+ assert meta == {'title': 'Kept Title', 'author': 'Site Author'}, meta
+ assert globals['_RESULT_GAPS'] == ['_Converter gap: citation author extraction failed: RuntimeError: fixture citation crash_'], globals['_RESULT_GAPS']
 elif case == 'image':
  class Image:
   def get(self, key, default=None): return {'src':'data:image/png;base64,fixture','alt':'Gauge diagram'}.get(key,default)
@@ -101,7 +113,7 @@ elif case == 'errors':
 	if err := os.WriteFile(probe, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"island", "metadata", "image", "errors"} {
+	for _, name := range []string{"island", "metadata", "cited", "image", "errors"} {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()

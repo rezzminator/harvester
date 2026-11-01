@@ -758,34 +758,53 @@ CONSENT_DISMISS_JS = r"""(args) => {
   return {pressed: [], removed: []};
 }"""
 
-# Removes consent overlays from the main frame — the known CMP containers and
-# any fixed or sticky element carrying consent markers (in its own names, or,
-# when it covers most of the viewport, anywhere inside) — and, when it removed
-# one or when *force* (a scroll found the page blocked), undoes the scroll lock:
-# overflow back to auto on html and body, a fixed body released, scroll-lock
-# classes dropped. Returns {"removed": [names]}.
-CONSENT_CLEAR_JS = r"""(args) => {
+# Removes the known CMP containers from the main frame and measures every fixed
+# or sticky element (consent_removals decides which go): tag (its
+# data-harvester-consent value), name, own (consent markers in its own id,
+# class or aria-label), covers (half the viewport or more), mentions (a consent
+# container inside, or cookie/consent in its text) and text (its text length);
+# body is the body's text length. Returns {"removed": [names], "candidates": [...], "body": n}.
+CONSENT_SCAN_JS = r"""(args) => {
   const harvesterConsent = true;
   const markers = /consent|cookie|\bcmp\b|cmp-|gdpr|onetrust|didomi|sp_message|usercentrics|cybot|truste/i;
   const removed = [];
   const name = (el) => el.id || (el.tagName.toLowerCase() + (typeof el.className === 'string' && el.className ? '.' + el.className.trim().split(/\s+/)[0] : ''));
-  const remove = (el) => { if (el.isConnected) { removed.push(name(el)); el.remove(); } };
-  for (const selector of args.selectors) for (const el of document.querySelectorAll(selector)) remove(el);
-  const bodyText = document.body ? document.body.innerText.length : 0;
+  for (const selector of args.selectors) for (const el of document.querySelectorAll(selector)) {
+    if (el.isConnected) { removed.push(name(el)); el.remove(); }
+  }
   const viewport = window.innerWidth * window.innerHeight;
+  const candidates = [];
   for (const el of document.querySelectorAll('body *')) {
-    if (!el.isConnected) continue;
     const style = getComputedStyle(el);
     if (style.position !== 'fixed' && style.position !== 'sticky') continue;
-    const own = markers.test(el.id + ' ' + (typeof el.className === 'string' ? el.className : '') + ' ' + (el.getAttribute('aria-label') || ''));
     const box = el.getBoundingClientRect();
-    const covers = box.width * box.height >= viewport * 0.5;
-    const inside = covers && (el.querySelector(args.container) !== null || /cookie|consent/i.test(el.innerText || ''));
-    if (!own && !inside) continue;
-    if (bodyText > 2000 && (el.innerText || '').length > bodyText * 0.5) continue;
-    remove(el);
+    const text = el.innerText || '';
+    const tag = String(candidates.length);
+    el.setAttribute('data-harvester-consent', tag);
+    candidates.push({
+      tag, name: name(el),
+      own: markers.test(el.id + ' ' + (typeof el.className === 'string' ? el.className : '') + ' ' + (el.getAttribute('aria-label') || '')),
+      covers: box.width * box.height >= viewport * 0.5,
+      mentions: el.querySelector(args.container) !== null || /cookie|consent/i.test(text),
+      text: text.length,
+    });
   }
-  if (removed.length || args.force) {
+  return {removed, candidates, body: document.body ? document.body.innerText.length : 0};
+}"""
+
+# Removes the tagged elements args.tags names (still attached), drops every
+# data-harvester-consent tag, and, when args.unlock or it removed one, undoes the
+# scroll lock: overflow back to auto on html and body, a fixed body released,
+# scroll-lock classes dropped. Returns {"removed": [tags]}.
+CONSENT_CLEAR_JS = r"""(args) => {
+  const harvesterConsent = true;
+  const removed = [];
+  for (const el of document.querySelectorAll('[data-harvester-consent]')) {
+    const tag = el.getAttribute('data-harvester-consent');
+    el.removeAttribute('data-harvester-consent');
+    if (args.tags.includes(tag) && el.isConnected) { removed.push(tag); el.remove(); }
+  }
+  if (removed.length || args.unlock) {
     for (const el of [document.documentElement, document.body]) {
       if (!el) continue;
       el.style.setProperty('overflow', 'auto', 'important');
@@ -800,8 +819,30 @@ CONSENT_CLEAR_JS = r"""(args) => {
       }
     }
   }
-  return {pressed: [], removed: removed};
+  return {removed: removed};
 }"""
+
+# A page with more body text than this keeps even an own-marked element that
+# holds most of it.
+CONSENT_BIG_PAGE_CHARS = 2000
+
+
+def consent_removals(candidates, body):
+    """The tags of the fixed or sticky elements (CONSENT_SCAN_JS) that are
+    consent overlays: one whose own id, class or aria-label marks it (unless it
+    holds most of a big page's text), or one covering half the viewport with
+    consent inside it. An element holding most of the body's text is the
+    page's content, never an overlay by what it mentions (an app shell with a
+    "we use cookies" line), whatever the page's size."""
+    tags = []
+    for candidate in candidates:
+        most = candidate["text"] > body * 0.5
+        if candidate["own"]:
+            if not (body > CONSENT_BIG_PAGE_CHARS and most):
+                tags.append(candidate["tag"])
+        elif candidate["covers"] and candidate["mentions"] and not most:
+            tags.append(candidate["tag"])
+    return tags
 
 
 async def dismiss_consent(page):
@@ -826,12 +867,17 @@ async def dismiss_consent(page):
 
 
 async def clear_consent(page, force):
-    """Remove the main frame's consent overlays and, when one was removed or
-    *force*, undo its scroll lock (CONSENT_CLEAR_JS); returns the removed
-    names."""
-    result = await page.evaluate(CONSENT_CLEAR_JS, {"selectors": CONSENT_CONTAINERS, "container": CONSENT_CONTAINER,
-                                                    "force": force})
-    return (result or {}).get("removed") or []
+    """Remove the main frame's consent overlays — the known CMP containers and
+    what consent_removals picks from the scan (CONSENT_SCAN_JS) — and, when one
+    was removed or *force*, undo its scroll lock (CONSENT_CLEAR_JS); returns
+    the removed names."""
+    scan = await page.evaluate(CONSENT_SCAN_JS, {"selectors": CONSENT_CONTAINERS, "container": CONSENT_CONTAINER}) or {}
+    removed = scan.get("removed") or []
+    candidates = scan.get("candidates") or []
+    tags = consent_removals(candidates, scan.get("body") or 0)
+    result = await page.evaluate(CONSENT_CLEAR_JS, {"tags": tags, "unlock": force or bool(removed)}) or {}
+    names = {candidate["tag"]: candidate["name"] for candidate in candidates}
+    return removed + [names[tag] for tag in result.get("removed") or []]
 
 
 async def snapshot(page):
@@ -1288,12 +1334,19 @@ async def open_rung(url, ask_fetchable):
 async def guarded_context(chrome, guarded_ask, caller=None, **extra):
     """A new context on *chrome* as a visitor arrives (fetch_browser's doc):
     the stock User-Agent and its client hints, returned as the ua_override
-    render_page sends over CDP. Both SSRF
+    render_page sends over CDP. An engine whose version or client hints are
+    unreadable renders with its own UA (no ua_override), the HeadlessChrome risk
+    named on stderr: a guessed stock UA would contradict its hints. Both SSRF
     route guards and the WebRTC block are installed before any page opens.
     *extra* goes to new_context (accept_downloads for a download)."""
-    metadata = await engine_ua_metadata(chrome, guarded_ask)
-    user_agent = stock_user_agent(chrome.version)
-    ua_override = {"userAgent": user_agent, "userAgentMetadata": metadata}
+    try:
+        metadata = await engine_ua_metadata(chrome, guarded_ask)
+        user_agent = stock_user_agent(chrome.version)
+        ua_override = {"userAgent": user_agent, "userAgentMetadata": metadata}
+    except ValueError as exc:
+        print(f"browser rung: {exc}; rendering with the engine's own User-Agent, which names HeadlessChrome "
+              "and may meet an anti-bot wall", file=sys.stderr)
+        user_agent = ua_override = None
     context = await chrome.new_context(**context_options(user_agent), **extra)
     await install_route_guards(context, guarded_ask, caller)
     await context.add_init_script(WEBRTC_BLOCK_SCRIPT)

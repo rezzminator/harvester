@@ -118,6 +118,7 @@ const (
 	sourceOpenAIRE        = "openaire"
 	sourceOSF             = "osf"
 	sourcePLOS            = "plos"
+	sourcePubMed          = "pubmed"
 	sourceSemanticScholar = "semanticscholar"
 	sourceUnpaywall       = "unpaywall"
 	sourceZenodo          = "zenodo"
@@ -350,6 +351,10 @@ type Result struct {
 	// travels as the marker line the content opens with (partialMarkerPrefix),
 	// which the store lifts off the body (splitArtifact).
 	Partial string `json:"partial,omitempty"`
+	// converterError is the converter's own error a failed fetch's kind names
+	// (a conversion outage, an empty conversion): the published failure quotes
+	// it, redacted, since the published text never quotes Error itself.
+	converterError string
 }
 
 // Harvester owns transport, policy and cache state.

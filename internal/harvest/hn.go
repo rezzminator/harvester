@@ -225,7 +225,8 @@ func hnPageLoader(doc *html.Node, page *url.URL, thread hnThread, target *url.UR
 }
 
 // hnMerge appends every row not already in thread's tree after its last row,
-// and returns how many it appended.
+// and returns how many it appended; a row with no id cannot repeat, so it is
+// always appended.
 func hnMerge(thread hnThread, incoming []*html.Node) int {
 	if thread.tree == nil {
 		return 0
@@ -242,7 +243,7 @@ func hnMerge(thread hnThread, incoming []*html.Node) int {
 	added := 0
 	for _, row := range incoming {
 		id := nodeAttr(row, "id")
-		if id == "" || have[id] {
+		if id != "" && have[id] {
 			continue
 		}
 		have[id] = true
@@ -507,7 +508,11 @@ func (comment hnComment) markdown() string {
 	if comment.posted != "" {
 		header += " · " + comment.posted
 	}
-	header += " · [#" + comment.id + "](https://" + hnHost + "/item?id=" + comment.id + ")"
+	if comment.id == "" {
+		header += " · #unknown id"
+	} else {
+		header += " · [#" + comment.id + "](https://" + hnHost + "/item?id=" + comment.id + ")"
+	}
 	if comment.state != "" {
 		header += " · *" + comment.state + "*"
 	}

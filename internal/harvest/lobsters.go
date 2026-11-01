@@ -69,7 +69,7 @@ func lobstersCommentTree(list *html.Node, level int, renderer markdownRenderer, 
 			lobstersCommentTree(child, level, renderer, into)
 		case child.DataAtom == atom.Ol && hasClass(child, "comments"):
 			lobstersCommentTree(child, level+1, renderer, into)
-		case child.DataAtom == atom.Div && hasClass(child, "comment") && nodeAttr(child, "data-shortid") != "":
+		case child.DataAtom == atom.Div && hasClass(child, "comment"):
 			*into = append(*into, lobstersReadComment(child, level, renderer))
 		}
 	}
@@ -163,7 +163,7 @@ func lobstersStated(story *html.Node) (int, bool) {
 func extractLobstersStory(doc *html.Node, page *url.URL) (siteExtraction, bool) {
 	story := firstClassElement(doc, atom.Li, "story")
 	list := firstWithAttr(doc, "id", "story_comments", nil)
-	if story == nil || list == nil || nodeAttr(story, "data-shortid") == "" {
+	if story == nil || list == nil {
 		return siteExtraction{}, false
 	}
 	id := nodeAttr(story, "data-shortid")
@@ -233,7 +233,11 @@ func extractLobstersStory(doc *html.Node, page *url.URL) (siteExtraction, bool) 
 	if len(meta) > 0 {
 		out.WriteString(strings.Join(meta, " · ") + "  \n")
 	}
-	threadURL := "https://" + lobstersHost + "/s/" + id
+	// A story with no id of its own is linked at the address that was asked for.
+	threadURL := page.String()
+	if id != "" {
+		threadURL = "https://" + lobstersHost + "/s/" + id
+	}
 	out.WriteString("**Thread:** " + threadURL + "  \n")
 	if link != "" && !strings.HasPrefix(link, threadURL) {
 		out.WriteString("**Link:** " + link + "  \n")
@@ -276,7 +280,11 @@ func (comment lobstersComment) markdown() string {
 	if comment.score != "" {
 		header += " · " + comment.score + " points"
 	}
-	header += " · [#" + comment.id + "](https://" + lobstersHost + "/c/" + comment.id + ")"
+	if comment.id == "" {
+		header += " · #unknown id"
+	} else {
+		header += " · [#" + comment.id + "](https://" + lobstersHost + "/c/" + comment.id + ")"
+	}
 	if comment.state != "" {
 		header += " · *" + comment.state + "*"
 	}

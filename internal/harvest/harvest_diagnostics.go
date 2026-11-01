@@ -53,20 +53,38 @@ func noteRungOutcome(err, lastErr error, lastErrorKind string) (string, error) {
 	return lastErrorKind, lastErr
 }
 
-// convertOutageNote appends a tool-outage addendum to message, and fills
-// lastErrorKind when nothing more specific already claimed it, when a static
-// rung's converter failed (F12) and no MORE SPECIFIC diagnostic already
-// covers it: an empty-PDF conversion, a wrong-kind PDF, and an app-shell
-// terminal each already carry their own tailored message, and a real
-// conversion failure on an earlier rung must never be masked by — or
-// duplicate — one of those.
-func convertOutageNote(message, kind string, outage, emptyPDFConvert, wrongPDF, appShellFailure bool) (string, string) {
-	if !outage || emptyPDFConvert || wrongPDF || appShellFailure {
-		return message, kind
+// converterNote appends what a static rung's converter answered to message,
+// fills kind when nothing more specific already claimed it, and returns the
+// converter's error the note quotes for the published failure. A failure (F12)
+// is a tool outage, carrying the converter's error; a converter that ran and
+// read the document blank (emptyConversionError) is an empty document,
+// carrying what it read, never an outage. A wrong-kind PDF and an app-shell
+// terminal carry their own tailored message and take neither note; an
+// empty-PDF conversion carries its own empty-PDF message, which a failure on
+// another rung must never be masked by — or duplicate.
+func converterNote(message, kind string, failed, empty error, emptyPDFConvert, wrongPDF, appShellFailure bool) (string, string, string) {
+	if wrongPDF || appShellFailure {
+		return message, kind, ""
 	}
-	message += " A conversion step failed on an earlier rung — that is a tool outage on this server, not proof the page has nothing to extract."
-	if kind == "" {
-		kind = errorKindConvert
+	said := ""
+	if failed != nil && !emptyPDFConvert {
+		// The fetched bytes are not kept here; download_file fetches them again, unparsed.
+		said = failed.Error()
+		message += " A conversion step failed on an earlier rung — that is a tool outage on this server, not proof the page has nothing to extract; `download_file` still returns the file's bytes unparsed. The converter's error: " + said + "."
+		if kind == "" {
+			kind = errorKindConvert
+		}
 	}
-	return message, kind
+	if empty != nil {
+		if !emptyPDFConvert { // the empty-PDF message already says it converted EMPTY
+			message += " The converter ran and read the document as blank — it converted EMPTY, not a tool outage: " + empty.Error() + "."
+			if kind == "" {
+				kind = errorKindEmpty
+			}
+		}
+		if said == "" {
+			said = empty.Error()
+		}
+	}
+	return message, kind, said
 }

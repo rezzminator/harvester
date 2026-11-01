@@ -23,7 +23,16 @@ func (h *Harvester) storeResult(
 	facts["gaps"] = gaps
 	path, err := h.cache.save(source, kind, method, body, statusCode, rungs, facts)
 	if err != nil {
-		return Result{Source: source, Kind: kind, Error: err.Error(), Rungs: rungs}
+		// The document is whole; only its cache copy is missing, so it goes back
+		// inline and untruncated (there is no path to read the rest from).
+		obs.Logger(context.Background()).Warn("harvest: the cache could not save an artifact; returned inline",
+			"source", logSource(source), "path", path, obs.FieldErr, err.Error())
+		chars := contentChars(body)
+		return Result{
+			Source: source, Kind: kind, Content: body, Method: method, CacheStatus: cacheStatusMiss,
+			Bytes: bytes, Chars: chars, ContentChars: chars, HTTPStatus: statusCode, Rungs: rungs,
+			Partial: joinReasons(gaps, cacheNotSavedGap),
+		}
 	}
 	h.afterCacheWrite()
 	status := cacheStatusMiss
@@ -52,6 +61,10 @@ func (h *Harvester) storeResult(
 		Partial:      gaps,
 	}
 }
+
+// cacheNotSavedGap names a result whose cache save failed: its content is all
+// there is, inline, and the next read fetches it again.
+const cacheNotSavedGap = "not saved to the cache (a later read fetches it again)"
 
 func (h *Harvester) storeResultAlias(
 	source, canonicalSource string,

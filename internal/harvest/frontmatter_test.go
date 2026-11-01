@@ -103,6 +103,21 @@ func TestSplitArtifactLiftsWhatTheBodyMustNotCarry(t *testing.T) {
 		},
 		{name: "forged metadata line", content: forged, body: forged, meta: map[string]string{}},
 		{
+			name: "a metadata line with one key of another shape keeps the rest",
+			content: converterMetaPrefix + converterMetaToken + ` {"title":"T","author":["A","B"]} -->` +
+				"\n\nThe body.\n",
+			gaps: "converter metadata unreadable: author",
+			body: "The body.\n",
+			meta: map[string]string{"title": "T"},
+		},
+		{
+			name:    "a metadata line that is not JSON",
+			content: converterMetaPrefix + converterMetaToken + ` {"title": -->` + "\n\nThe body.\n",
+			gaps:    "converter metadata unreadable: the whole line",
+			body:    "The body.\n",
+			meta:    map[string]string{},
+		},
+		{
 			// convertHTML's withPartial defuses only a marker at the very top;
 			// under the metadata line the page's own copy must stay page text.
 			name: "the page's own partial marker under the metadata line",

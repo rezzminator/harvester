@@ -46,10 +46,11 @@ func TestHarvestPrintsTheReadToolsBlock(t *testing.T) {
 	}
 }
 
-// TestHarvestExitsNonzeroForAnItemItPrintsAsFailed: a read that returns a
-// thin challenge page has no harvester error, yet its block is an error line;
-// the exit code says what the block says, so a script never takes it as read.
-func TestHarvestExitsNonzeroForAnItemItPrintsAsFailed(t *testing.T) {
+// TestHarvestReadsAShortLocalFileThatNamesACaptcha: a short file whose text
+// names a captcha is the person's own content, never a challenge wall (only
+// the fetch ladder judges a wall, and a local read has none): its text is
+// printed and the read exits 0.
+func TestHarvestReadsAShortLocalFileThatNamesACaptcha(t *testing.T) {
 	runtime := downloadRuntime(t)
 	source := filepath.Join(runtime.Paths.Home, "challenge.txt")
 	if err := os.WriteFile(source, []byte("Please complete the captcha to continue.\n"), 0o600); err != nil {
@@ -57,8 +58,9 @@ func TestHarvestExitsNonzeroForAnItemItPrintsAsFailed(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := Harvest([]string{source}, &stdout, &stderr, runtime)
-	if !strings.Contains(stdout.String(), "\nerror: ") || code != 1 {
-		t.Fatalf("code=%d stdout=%q stderr=%q, want an error block and exit 1", code, stdout.String(), stderr.String())
+	lines := strings.Split(strings.TrimSuffix(stdout.String(), "\n"), "\n")
+	if code != 0 || len(lines) != 3 || lines[2] != "Please complete the captcha to continue." {
+		t.Fatalf("code=%d stdout=%q stderr=%q, want the file's text and exit 0", code, stdout.String(), stderr.String())
 	}
 }
 

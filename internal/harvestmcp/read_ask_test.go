@@ -1,6 +1,7 @@
 package harvestmcp
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -44,6 +45,7 @@ func TestReadAskAnswersOverTheItems(t *testing.T) {
 		isError       bool
 		wantArgs      string   // "" = the engine must not run
 		receipts      []string // what the engine reads of the failed items' receipts
+		stuckReceipts bool     // the receipt directory cannot be removed once the engine answered
 	}{
 		{
 			name: "defaults claude haiku", args: map[string]any{"urls": []string{askFixturePage}, "ask": "What does the page say?"},
@@ -85,6 +87,14 @@ func TestReadAskAnswersOverTheItems(t *testing.T) {
 				"error: this is a DOI; put it in publications.\n\n=== answer (claude haiku)\nfixture answer",
 			wantArgs: "--model|haiku|",
 			receipts: []string{"/source-002.json — source: 10.1234/ask", `"input": "10.1234/ask"`, `"error_kind": "invalid"`},
+		},
+		{
+			name:   "receipts that cannot be removed",
+			args:   map[string]any{"urls": []string{askFixturePage, "10.1234/ask"}, "ask": "What does the page say?"},
+			engine: reply, stuckReceipts: true,
+			want: "=== [1/2] " + askFixturePage + "\n{path}\n{size}\n\n=== [2/2] 10.1234/ask\n" +
+				"error: this is a DOI; put it in publications.\n\n=== answer (claude haiku)\nfixture answer",
+			wantArgs: "--model|haiku|",
 		},
 		{
 			name: "engine failed", args: map[string]any{"urls": []string{askFixturePage}, "ask": "What?"},
@@ -151,6 +161,11 @@ func TestReadAskAnswersOverTheItems(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("ASK_CAPTURE", capture)
+			if testCase.stuckReceipts {
+				restore := scratchRemoveAll
+				scratchRemoveAll = func(string) error { return errors.New("device busy") }
+				t.Cleanup(func() { scratchRemoveAll = restore })
+			}
 			machine := &config.Config{Claude: config.Claude{Binary: binary}, Codex: config.Codex{Binary: binary}, Ask: config.AskConfig{Prefs: map[engine.ID]config.EnginePrefs{engine.Codex: {Model: testCase.codexModel}}}}
 			if testCase.missingBinary {
 				machine.Claude.Binary = "/missing/claude"

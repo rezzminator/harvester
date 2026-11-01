@@ -144,7 +144,7 @@ func splitArtifact(content string, legacy bool) (map[string]string, string, stri
 		case strings.HasPrefix(line, partialMarkerPrefix):
 			gaps = joinReasons(gaps, strings.TrimPrefix(line, partialMarkerPrefix))
 		case strings.HasPrefix(line, converterMetaPrefix+converterMetaToken+" ") && strings.HasSuffix(line, " -->"):
-			readConverterMeta(line, meta)
+			gaps = joinReasons(gaps, readConverterMeta(line, meta))
 		case strings.HasPrefix(line, movedNotePrefix):
 			notes = append(notes, line)
 		default:
@@ -161,20 +161,42 @@ func splitArtifact(content string, legacy bool) (map[string]string, string, stri
 	}
 }
 
-func readConverterMeta(line string, meta map[string]string) {
+// readConverterMeta lifts the metadata line's known keys into meta, each key
+// decoded alone so one of another shape costs only itself; what did not decode
+// returns as a gap reason, "" when everything did.
+func readConverterMeta(line string, meta map[string]string) string {
 	data := strings.TrimSuffix(strings.TrimPrefix(line, converterMetaPrefix+converterMetaToken+" "), " -->")
-	read := map[string]string{}
+	read := map[string]json.RawMessage{}
 	if err := json.Unmarshal([]byte(data), &read); err != nil {
 		obs.Logger(context.Background()).Warn("harvest: a converter metadata line did not decode; it is dropped",
 			obs.FieldErr, err.Error())
-		return
+		return converterMetaUnreadable + "the whole line"
 	}
-	for key, value := range read {
-		if slices.Contains(converterMetaKeys, key) && strings.TrimSpace(value) != "" {
+	var unreadable []string
+	for _, key := range converterMetaKeys {
+		raw, ok := read[key]
+		if !ok {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			obs.Logger(context.Background()).Warn("harvest: a converter metadata key did not decode; it is dropped",
+				"key", key, obs.FieldErr, err.Error())
+			unreadable = append(unreadable, key)
+			continue
+		}
+		if strings.TrimSpace(value) != "" {
 			meta[key] = value
 		}
 	}
+	if len(unreadable) == 0 {
+		return ""
+	}
+	return converterMetaUnreadable + strings.Join(unreadable, ", ")
 }
+
+// converterMetaUnreadable opens the gap naming converter metadata that did not decode.
+const converterMetaUnreadable = "converter metadata unreadable: "
 
 // legacyEntry reports whether an artifact's frontmatter is an older
 // harvester's: every current write records chars, no older one did.

@@ -45,7 +45,7 @@ def convert(request):
             if time.time() > deadline:
                 raise RuntimeError("barrier never filled: the conversions ran one at a time")
             time.sleep(0.02)
-    return {"ok": True, "markdown": "%s pid=%d" % (name, os.getpid()), "kind": "html", "features": {}}
+    return {"ok": True, "markdown": "%s pid=%d" % (name, os.getpid())}
 
 converter.convert = convert
 sys.exit(converter.main())

@@ -83,6 +83,21 @@ func TestSteamAppLoadsItsReviews(t *testing.T) {
 	}
 }
 
+// TestSteamReviewWithNoIdIsKept: a review the API serves with no
+// recommendationid is not a reason to refuse its page: it renders under an
+// unknown id, and the other reviews render as before.
+func TestSteamReviewWithNoIdIsKept(t *testing.T) {
+	t.Parallel()
+	site := steamSite(t)
+	first := fmt.Sprintf(steamReviews, "%2A")
+	site.answers[first] = strings.Replace(site.answers[first], `"recommendationid": "100000002",`, ``, 1)
+	result := site.harvester(t).FetchWithOptions(context.Background(), steamURL, FetchOptions{Refresh: true})
+	want := "100000001,unknown id,100000003,100000004,100000005"
+	if got := strings.Join(socialRendered(result.Content), ","); got != want || result.Partial != "" {
+		t.Fatalf("reviews are wrong: got %v, want %v, partial=%q\n%.2500s", got, want, result.Partial, result.Content)
+	}
+}
+
 // TestSteamReviewsBeyondTheBoundAreNamed: an app stating more reviews than
 // the bounded page count reads renders the most recent pages and names the
 // rest, stated · loaded, in the partial marker.
@@ -121,22 +136,45 @@ func TestSteamReviewsBeyondTheBoundAreNamed(t *testing.T) {
 
 // TestSteamReviewsNotLoadedNameTheGap: a review answer the API refuses, or one
 // that is not its review list, is never rendered: the app renders with the
-// count its page states named unread, never as an app with no reviews.
+// count its page states named unread, never as an app with no reviews; a page
+// whose count is not a number, or states none, renders its count unstated,
+// never a made-up zero.
 func TestSteamReviewsNotLoadedNameTheGap(t *testing.T) {
 	t.Parallel()
 	first := fmt.Sprintf(steamReviews, "%2A")
-	for name, mutate := range map[string]func(site *socialSite){
-		"refused":     func(site *socialSite) { site.status = map[string]int{first: http.StatusForbidden} },
-		"not success": func(site *socialSite) { site.answers[first] = `{"success":2}` },
+	refuse := func(site *socialSite) { site.status = map[string]int{first: http.StatusForbidden} }
+	const unread = "steam app: 0 of 4 stated replies loaded — 4 stated repl(ies) not read; "
+	const unstated = "steam app: 0 replies loaded, none stated — replies not read; "
+	const refused = "1 loader request(s) failed (the app's review page 1 (https://store.steampowered.com/appreviews/" +
+		"4040): HTTP 403)"
+	for _, tc := range []struct {
+		name   string
+		mutate func(site *socialSite)
+		want   string
+	}{
+		{"refused", refuse, unread + refused},
+		{"not success", func(site *socialSite) { site.answers[first] = `{"success":2}` }, unread +
+			"1 loader request(s) failed (the app's review page 1 (https://store.steampowered.com/appreviews/4040): " +
+			"answered by a application/json body that is not a page of the store's review list)"},
+		{"count not a number", func(site *socialSite) {
+			refuse(site)
+			site.answers[steamPagePath] = strings.Replace(site.answers[steamPagePath],
+				`<meta itemprop="reviewCount" content="4">`, `<meta itemprop="reviewCount" content="4,000">`, 1)
+		}, unstated + refused},
+		{"count absent", func(site *socialSite) {
+			refuse(site)
+			site.answers[steamPagePath] = strings.Replace(site.answers[steamPagePath],
+				`<meta itemprop="reviewCount" content="4">`, ``, 1)
+		}, unstated + refused},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			site := steamSite(t)
-			mutate(site)
+			tc.mutate(site)
 			result := site.servingHarvester(t).FetchWithOptions(context.Background(), steamURL,
 				FetchOptions{Refresh: true})
-			if !strings.Contains(result.Partial, "4 stated repl(ies) not read") {
-				t.Fatalf("the partial marker does not name the unread reviews: %q (error %q)\n%.1500s",
-					result.Partial, result.Error, result.Content)
+			if result.Partial != tc.want {
+				t.Fatalf("the partial marker does not name the unread reviews: got %q, want %q (error %q)\n%.1500s",
+					result.Partial, tc.want, result.Error, result.Content)
 			}
 			if got := socialRendered(result.Content); len(got) != 0 {
 				t.Fatalf("reviews rendered from an answer not proved the app's: %v", got)

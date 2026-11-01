@@ -243,13 +243,28 @@ func TestLinkedInOrgLinks(t *testing.T) {
 	}
 
 	hub := `{"@type":"ItemList","name":"Top Companies","itemListElement":[{"position":1,` +
-		`"item":{"name":"Contoso","url":"https://www.linkedin.com/company/contoso?trk=hub"}}]}`
+		`"item":{"name":"Contoso","url":"https://www.linkedin.com/company/contoso?trk=hub"}},` +
+		`{"position":2,"item":{"url":"https://www.linkedin.com/company/fabrikam?trk=hub"}}]}`
 	markdown, found, err := linkedInHubPage(linkedInInline(t, ""), page.String(), linkedInTestEntities(t, hub))
 	if !found || err != nil {
 		t.Fatalf("the hub was not rendered (found %v, err %v)", found, err)
 	}
-	if want := "1. [Contoso](https://www.linkedin.com/company/contoso)"; !strings.Contains(markdown, want) {
-		t.Errorf("the hub lacks %q:\n%s", want, markdown)
+	for _, want := range []string{
+		"1. [Contoso](https://www.linkedin.com/company/contoso)\n",
+		"2. https://www.linkedin.com/company/fabrikam\n", // no name: its address labels it
+	} {
+		if !strings.Contains(markdown, want) {
+			t.Errorf("the hub lacks %q:\n%s", want, markdown)
+		}
+	}
+
+	cards := `<ul><li><div class="base-card" data-entity-urn="urn:li:jobPosting:1">` +
+		`<a class="base-card__full-link" href="/jobs/view/1?trk=x"></a>` +
+		`<h4 class="base-search-card__subtitle">Contoso</h4>` +
+		`<span class="job-search-card__location">Berlin</span></div></li></ul>`
+	if got, want := linkedInJobCards(linkedInInline(t, cards), page), []string{
+		"- https://www.linkedin.com/jobs/view/1 · Contoso · Berlin"}; len(got) != 1 || got[0] != want[0] {
+		t.Errorf("job cards = %q, want %q", got, want) // no title: the link labels it
 	}
 
 	about := linkedInInline(t, `<dl><div data-test-id="about-us__website"><dt>Website</dt><dd>`+

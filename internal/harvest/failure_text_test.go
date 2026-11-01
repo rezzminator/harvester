@@ -327,9 +327,9 @@ func TestNamedFailuresKeepTheirTextThroughBothPublicPasses(t *testing.T) {
 	if !ok {
 		t.Fatal("sharepoint.com is not a refused share service")
 	}
-	feed := "harvestpy conversion failed (ValueError): ValueError: the feed parsed to no title and no items: " +
-		"a broken or empty feed (Couldn't find end of Start Tag chan line 1); a feedparser fallback on a broken " +
-		"feed is unmeasured (stderr: conversion failed for kind='feed': ValueError: the feed parsed to no title)"
+	feed := "harvestpy conversion failed (ValueError): ValueError: the XML has no root element: Start tag " +
+		"expected, '<' not found (stderr: conversion failed for kind='feed': ValueError: the XML has no root " +
+		"element: Start tag expected, '<' not found)"
 	cases := []struct {
 		name   string
 		result Result
@@ -342,7 +342,7 @@ func TestNamedFailuresKeepTheirTextThroughBothPublicPasses(t *testing.T) {
 			"broken feed",
 			Result{Source: "/tmp/demo/broken-feed.xml", Kind: "feed", Error: feed},
 			errorKindConversion,
-			[]string{"a broken or empty feed", "a feedparser fallback on a broken feed is unmeasured"},
+			[]string{"the XML has no root element: Start tag expected, '<' not found"},
 		},
 		{
 			"unclassified",
