@@ -5,11 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/strikethrough"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/table"
 	"golang.org/x/net/html"
-	"golang.org/x/net/html/atom"
 
 	"github.com/rezzminator/harvester/internal/obs"
 )
@@ -476,9 +481,10 @@ func firstWithAttr(node *html.Node, key, value string, stop func(*html.Node) boo
 	return nil
 }
 
-// markdownBlocks renders a rich-text subtree (a post body, a comment body) as
-// Markdown blocks: paragraphs, headings, lists, quotes, code, links. Controls,
-// scripts, styles and inert templates are not text.
+// markdownRenderer renders a rich-text subtree (a post body, a comment body)
+// as Markdown through html-to-markdown: paragraphs, headings, lists, quotes,
+// code, tables, links, with text escaped. Controls, scripts, styles and inert
+// templates are not text.
 type markdownRenderer struct {
 	base *url.URL
 	// textOnly, when set, names links the site injects into user text (a
@@ -486,157 +492,89 @@ type markdownRenderer struct {
 	textOnly func(link *url.URL) bool
 }
 
-// lineBreak survives whitespace collapsing inside a paragraph as a hard break.
-const lineBreak = "\x00"
+// markdownConverter is the one converter every markdownRenderer uses; a
+// rendering's renderer reaches its link rule through the conversion context.
+var markdownConverter = newMarkdownConverter()
 
+type markdownRendererKey struct{}
+
+func newMarkdownConverter() *converter.Converter {
+	conv := converter.NewConverter(converter.WithPlugins(
+		base.NewBasePlugin(),
+		commonmark.NewCommonmarkPlugin(commonmark.WithHorizontalRule("---"), commonmark.WithListEndComment(false)),
+		table.NewTablePlugin(),
+		strikethrough.NewStrikethroughPlugin(),
+	))
+	for _, tag := range []string{"template", "button", "svg", "form"} {
+		conv.Register.TagType(tag, converter.TagTypeRemove, converter.PriorityStandard)
+	}
+	// A link that resolves to nothing (a fragment, a script) or that the site
+	// injected (textOnly) renders as its text alone.
+	conv.Register.RendererFor("a", converter.TagTypeInline,
+		func(ctx converter.Context, w converter.Writer, node *html.Node) converter.RenderStatus {
+			renderer, _ := ctx.Value(markdownRendererKey{}).(markdownRenderer)
+			if !renderer.linkIsText(nodeAttr(node, "href")) {
+				return converter.RenderTryNext
+			}
+			ctx.RenderChildNodes(ctx, w, node)
+			return converter.RenderSuccess
+		}, converter.PriorityEarly)
+	return conv
+}
+
+// linkIsText reports whether a link to href renders as its text alone.
+func (renderer markdownRenderer) linkIsText(href string) bool {
+	if strings.TrimSpace(href) == "" {
+		return false
+	}
+	resolved := renderer.resolve(href)
+	if resolved == "" {
+		return true
+	}
+	if renderer.textOnly == nil {
+		return false
+	}
+	parsed, err := url.Parse(resolved)
+	if err != nil {
+		obs.Logger(context.Background()).Warn("harvest: a link could not be parsed; kept as a link",
+			"href", logSource(resolved), obs.FieldErr, err.Error())
+		return false
+	}
+	return renderer.textOnly(parsed)
+}
+
+// blocks renders node as Markdown: one block holding the whole rendering, nil
+// when it renders nothing. node is left untouched (the converter edits the
+// tree it renders, so it renders a copy).
 func (renderer markdownRenderer) blocks(node *html.Node) []string {
-	var out []string
-	var paragraph strings.Builder
-	flush := func() {
-		text := strings.Join(strings.Fields(paragraph.String()), " ")
-		text = strings.TrimSpace(
-			strings.ReplaceAll(strings.ReplaceAll(text, " "+lineBreak, lineBreak), lineBreak+" ", lineBreak),
-		)
-		text = strings.Trim(strings.ReplaceAll(text, lineBreak, "  \n"), " \n")
-		if text != "" {
-			out = append(out, text)
-		}
-		paragraph.Reset()
+	domain := ""
+	if renderer.base != nil {
+		domain = renderer.base.String()
 	}
-	for child := node.FirstChild; child != nil; child = child.NextSibling {
-		if child.Type == html.TextNode {
-			paragraph.WriteString(child.Data)
-			continue
-		}
-		if child.Type != html.ElementNode || skippedInMarkdown(child) {
-			continue
-		}
-		switch child.DataAtom {
-		case atom.P, atom.Div, atom.Section, atom.Article, atom.Figure, atom.Figcaption, atom.Table,
-			atom.Thead, atom.Tbody, atom.Tfoot, atom.Details, atom.Summary:
-			flush()
-			out = append(out, renderer.blocks(child)...)
-		case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
-			flush()
-			if text := renderer.inline(child); text != "" {
-				level, _ := strconv.Atoi(child.Data[1:])
-				out = append(out, strings.Repeat("#", level)+" "+text)
-			}
-		case atom.Ul, atom.Ol:
-			flush()
-			if list := renderer.list(child, child.DataAtom == atom.Ol); list != "" {
-				out = append(out, list)
-			}
-		case atom.Blockquote:
-			flush()
-			if inner := strings.Join(renderer.blocks(child), "\n\n"); inner != "" {
-				out = append(out, prefixLines(inner, "> ", ">"))
-			}
-		case atom.Pre:
-			flush()
-			out = append(out, "```\n"+strings.Trim(rawText(child), "\n")+"\n```")
-		case atom.Hr:
-			flush()
-			out = append(out, "---")
-		case atom.Tr:
-			flush()
-			var cells []string
-			for cell := child.FirstChild; cell != nil; cell = cell.NextSibling {
-				if cell.Type == html.ElementNode && (cell.DataAtom == atom.Td || cell.DataAtom == atom.Th) {
-					cells = append(cells, renderer.inline(cell))
-				}
-			}
-			out = append(out, "| "+strings.Join(cells, " | ")+" |")
-		default:
-			paragraph.WriteString(renderer.inlineElement(child))
-		}
+	out, err := markdownConverter.ConvertNode(cloneTree(node),
+		converter.WithDomain(domain),
+		converter.WithContext(context.WithValue(context.Background(), markdownRendererKey{}, renderer)))
+	if err != nil {
+		obs.Logger(context.Background()).Warn("harvest: a rich-text body could not be rendered; left out",
+			obs.FieldErr, err.Error())
+		return nil
 	}
-	flush()
-	return out
+	if text := strings.TrimSpace(string(out)); text != "" {
+		return []string{text}
+	}
+	return nil
 }
 
-func (renderer markdownRenderer) list(node *html.Node, ordered bool) string {
-	var items []string
-	index := 0
-	for item := node.FirstChild; item != nil; item = item.NextSibling {
-		if item.Type != html.ElementNode || item.DataAtom != atom.Li {
-			continue
-		}
-		index++
-		marker := "- "
-		if ordered {
-			marker = strconv.Itoa(index) + ". "
-		}
-		body := strings.Join(renderer.blocks(item), "\n\n")
-		items = append(items, marker+indentAfterFirst(body, strings.Repeat(" ", len(marker))))
+// cloneTree is a deep copy of node, detached from its parent and siblings.
+func cloneTree(node *html.Node) *html.Node {
+	clone := &html.Node{
+		Type: node.Type, DataAtom: node.DataAtom, Data: node.Data, Namespace: node.Namespace,
+		Attr: slices.Clone(node.Attr),
 	}
-	return strings.Join(items, "\n")
-}
-
-func (renderer markdownRenderer) inline(node *html.Node) string {
-	var text strings.Builder
 	for child := node.FirstChild; child != nil; child = child.NextSibling {
-		switch {
-		case child.Type == html.TextNode:
-			text.WriteString(child.Data)
-		case child.Type == html.ElementNode && !skippedInMarkdown(child):
-			text.WriteString(renderer.inlineElement(child))
-		}
+		clone.AppendChild(cloneTree(child))
 	}
-	return strings.Join(strings.Fields(strings.ReplaceAll(text.String(), lineBreak, " ")), " ")
-}
-
-func (renderer markdownRenderer) inlineElement(node *html.Node) string {
-	switch node.DataAtom {
-	case atom.Br:
-		return lineBreak
-	case atom.A:
-		text := renderer.inline(node)
-		href := renderer.resolve(nodeAttr(node, "href"))
-		if renderer.textOnly != nil && href != "" {
-			if parsed, err := url.Parse(href); err == nil && renderer.textOnly(parsed) {
-				return text
-			}
-		}
-		switch {
-		case href == "":
-			return text
-		case text == "":
-			return href
-		}
-		return "[" + text + "](" + href + ")"
-	case atom.Strong, atom.B:
-		return wrapInline(renderer.inline(node), "**")
-	case atom.Em, atom.I:
-		return wrapInline(renderer.inline(node), "*")
-	case atom.Code:
-		return wrapInline(rawText(node), "`")
-	case atom.Del, atom.S:
-		return wrapInline(renderer.inline(node), "~~")
-	case atom.Img:
-		if src := renderer.resolve(nodeAttr(node, "src")); src != "" {
-			return "![" + nodeAttr(node, "alt") + "](" + src + ")"
-		}
-		return ""
-	}
-	// Unknown and custom inline elements (spans, emotes, number widgets)
-	// contribute their text; a block nested inside one keeps its separation.
-	var text strings.Builder
-	for child := node.FirstChild; child != nil; child = child.NextSibling {
-		switch {
-		case child.Type == html.TextNode:
-			text.WriteString(child.Data)
-		case child.Type == html.ElementNode && !skippedInMarkdown(child):
-			if child.DataAtom == atom.P || child.DataAtom == atom.Div {
-				text.WriteString(
-					" " + lineBreak + lineBreak + strings.Join(renderer.blocks(child), lineBreak+lineBreak) + " ",
-				)
-				continue
-			}
-			text.WriteString(renderer.inlineElement(child))
-		}
-	}
-	return text.String()
+	return clone
 }
 
 func (renderer markdownRenderer) resolve(href string) string {
@@ -654,14 +592,6 @@ func (renderer markdownRenderer) resolve(href string) string {
 		return renderer.base.ResolveReference(parsed).String()
 	}
 	return parsed.String()
-}
-
-func skippedInMarkdown(node *html.Node) bool {
-	switch node.DataAtom {
-	case atom.Script, atom.Style, atom.Template, atom.Button, atom.Svg, atom.Noscript, atom.Input, atom.Form:
-		return true
-	}
-	return false
 }
 
 func wrapInline(text, mark string) string {

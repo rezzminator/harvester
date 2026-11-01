@@ -239,7 +239,7 @@ func TestStackExchangeQuestionLoadsEveryAnswerAndComment(t *testing.T) {
 		"**Question:** https://stackoverflow.com/questions/927358/example-question  \n",
 		"**Answers:** 105 stated · 105 loaded · **Comments:** 143 stated · 143 loaded, on the question and the answers loaded\n",
 		"- point one\n- point two",
-		"```\ngit reset HEAD~1\n```",
+		"```bash\ngit reset HEAD~1\n```",
 		"Try `git log --oneline` first; see [the doc](https://example.com/doc).",
 		"**user-7 & co**",
 	} {

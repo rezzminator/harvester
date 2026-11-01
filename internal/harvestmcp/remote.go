@@ -1,6 +1,7 @@
 package harvestmcp
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -15,7 +16,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 
 	"github.com/rezzminator/harvester/internal/clock"
 	"github.com/rezzminator/harvester/internal/harvest"
@@ -51,7 +54,10 @@ type RemoteServer struct {
 	parsed    *url.URL
 	service   *Service
 	store     *authStore
-	mcp       http.Handler
+	// mcp is the MCP handler behind the bearer wall.
+	mcp http.Handler
+	// resourceMetadata serves the RFC 9728 protected-resource document.
+	resourceMetadata http.Handler
 }
 
 // NewRemote builds the external gateway handler without binding a socket. It
@@ -109,10 +115,27 @@ func NewRemote(options RemoteOptions) (*RemoteServer, error) {
 		statePath = defaultAuthStatePath(service.runtime.CacheDir)
 	}
 	r.store = newAuthStore(publicURL, r.resource, options.Passphrase, options.StaticToken, statePath, runtime.Clock)
-	r.mcp = LinkClientDisconnect(mcp.NewStreamableHTTPHandler(
+	server := LinkClientDisconnect(mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return service.Server() },
 		&mcp.StreamableHTTPOptions{JSONResponse: false, Stateless: false, DisableLocalhostProtection: true},
 	))
+	// The store owns token expiry on the injected clock, so the SDK's own
+	// wall-clock expiry check is off.
+	bearer := auth.RequireBearerToken(r.verifyBearer, &auth.RequireBearerTokenOptions{
+		ResourceMetadataURL:    publicURL + "/.well-known/oauth-protected-resource/mcp",
+		Scopes:                 []string{HarvesterScope},
+		AllowMissingExpiration: true,
+	})
+	r.mcp = bearer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		req.Body = http.MaxBytesReader(w, req.Body, mcpMaxBodyBytes)
+		server.ServeHTTP(w, req)
+	}))
+	r.resourceMetadata = auth.ProtectedResourceMetadataHandler(&oauthex.ProtectedResourceMetadata{
+		Resource:             r.resource,
+		AuthorizationServers: []string{publicURL + "/"},
+		ScopesSupported:      []string{HarvesterScope},
+		ResourceName:         "harvester",
+	})
 	return r, nil
 }
 
@@ -148,26 +171,13 @@ func (r *RemoteServer) serveHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 		r.writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "auth": r.store != nil}, false)
 	case mcpPath:
-		if r.store != nil && !r.bearerOK(req) {
-			r.unauthorized(w)
-			return
-		}
-		req.Body = http.MaxBytesReader(w, req.Body, mcpMaxBodyBytes)
 		r.mcp.ServeHTTP(w, req)
 	case "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp":
 		if r.store == nil {
 			http.NotFound(w, req)
 			return
 		}
-		r.metadata(
-			w,
-			map[string]any{
-				"resource":              r.resource,
-				"authorization_servers": []string{r.publicURL + "/"},
-				"scopes_supported":      []string{HarvesterScope},
-				"resource_name":         "harvester",
-			},
-		)
+		r.resourceMetadata.ServeHTTP(w, req)
 	case "/.well-known/oauth-authorization-server",
 		"/.well-known/oauth-authorization-server/mcp",
 		"/.well-known/openid-configuration",
@@ -230,45 +240,43 @@ func isLoopback(host string) bool {
 	return strings.EqualFold(host, "localhost") || net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()
 }
 
-func (r *RemoteServer) bearerOK(req *http.Request) bool {
-	parts := strings.Fields(req.Header.Get("Authorization"))
-	return len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") && r.store.verify(parts[1])
+// verifyBearer is the bearer wall's verifier: a token the store holds carries
+// the one harvester scope.
+func (r *RemoteServer) verifyBearer(_ context.Context, token string, _ *http.Request) (*auth.TokenInfo, error) {
+	if !r.store.verify(token) {
+		return nil, auth.ErrInvalidToken
+	}
+	return &auth.TokenInfo{Scopes: []string{HarvesterScope}}, nil
 }
 
-func (r *RemoteServer) unauthorized(w http.ResponseWriter) {
-	w.Header().
-		Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata=%q, scope=%q`, r.publicURL+"/.well-known/oauth-protected-resource/mcp", HarvesterScope))
-	r.oauthError(w, http.StatusUnauthorized, "invalid_token", "missing or invalid bearer token")
-}
-
-func (r *RemoteServer) metadata(w http.ResponseWriter, value map[string]any) {
+func (r *RemoteServer) metadata(w http.ResponseWriter, value any) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	r.writeJSON(w, http.StatusOK, value, false)
 }
 
-func (r *RemoteServer) authMetadata() map[string]any {
-	issuer := r.publicURL + "/"
-	return map[string]any{
-		"issuer":                           issuer,
-		"authorization_endpoint":           r.publicURL + "/authorize",
-		"token_endpoint":                   r.publicURL + "/token",
-		"registration_endpoint":            r.publicURL + "/register",
-		"revocation_endpoint":              r.publicURL + "/revoke",
-		"scopes_supported":                 []string{HarvesterScope},
-		"response_types_supported":         []string{"code"},
-		"grant_types_supported":            []string{authorizationCodeGrant, refreshTokenGrant},
-		"code_challenge_methods_supported": []string{pkceMethodS256},
-		"token_endpoint_auth_methods_supported": []string{
-			tokenAuthNone,
-			tokenAuthClientSecretPost,
-			tokenAuthClientSecretBasic,
-		},
-		"revocation_endpoint_auth_methods_supported": []string{
-			tokenAuthNone,
-			tokenAuthClientSecretPost,
-			tokenAuthClientSecretBasic,
-		},
-	}
+// authServerMeta is the RFC 8414 document; jwks_uri is shadowed to be left
+// out, since the SDK type writes it empty and a client validating it as a
+// URL (the Python MCP SDK's) refuses "".
+type authServerMeta struct {
+	oauthex.AuthServerMeta
+	JWKSURI string `json:"jwks_uri,omitempty"`
+}
+
+func (r *RemoteServer) authMetadata() authServerMeta {
+	authMethods := []string{tokenAuthNone, tokenAuthClientSecretPost, tokenAuthClientSecretBasic}
+	return authServerMeta{AuthServerMeta: oauthex.AuthServerMeta{
+		Issuer:                                 r.publicURL + "/",
+		AuthorizationEndpoint:                  r.publicURL + "/authorize",
+		TokenEndpoint:                          r.publicURL + "/token",
+		RegistrationEndpoint:                   r.publicURL + "/register",
+		RevocationEndpoint:                     r.publicURL + "/revoke",
+		ScopesSupported:                        []string{HarvesterScope},
+		ResponseTypesSupported:                 []string{"code"},
+		GrantTypesSupported:                    []string{authorizationCodeGrant, refreshTokenGrant},
+		CodeChallengeMethodsSupported:          []string{pkceMethodS256},
+		TokenEndpointAuthMethodsSupported:      authMethods,
+		RevocationEndpointAuthMethodsSupported: authMethods,
+	}}
 }
 
 func (r *RemoteServer) writeJSON(w http.ResponseWriter, status int, value any, noStore bool) {

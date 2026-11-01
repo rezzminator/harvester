@@ -315,10 +315,11 @@ func redditRenderComment(node *html.Node, level int, renderer markdownRenderer) 
 	// a reply QUOTING "removed by moderator" is not itself removed.
 	stub := bodyText == ""
 	switch {
-	case bodyText == "[removed]" ||
+	// The placeholders are compared as rendered: their bracket escaped.
+	case bodyText == `\[removed]` ||
 		stub && (strings.Contains(ownText, "removed by moderator") || strings.Contains(ownText, "removed by reddit")):
 		comment.status = "removed"
-	case comment.author == "[deleted]" || bodyText == "[deleted]" || stub && strings.Contains(ownText, "deleted by user"):
+	case comment.author == "[deleted]" || bodyText == `\[deleted]` || stub && strings.Contains(ownText, "deleted by user"):
 		comment.status = "deleted"
 	}
 	return comment

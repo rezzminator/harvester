@@ -100,6 +100,33 @@ func TestPythonArchiveExtractionRetainsInterpreterLibrariesAndRejectsTraversal(t
 	if _, err := extractPython(unsafePath, filepath.Join(t.TempDir(), "python")); err == nil {
 		t.Fatal("path traversal archive was accepted")
 	}
+	// A symlink written through a symlinked parent would point outside the
+	// root while its path, as written, looks contained.
+	redirectedPath := filepath.Join(t.TempDir(), "redirected.tar.gz")
+	redirectedFile, err := os.Create(redirectedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redirectedGzip := gzip.NewWriter(redirectedFile)
+	redirectedTar := tar.NewWriter(redirectedGzip)
+	for _, header := range []*tar.Header{
+		{Name: "python/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "python/up", Linkname: "..", Typeflag: tar.TypeSymlink, Mode: 0o777},
+		{Name: "python/up/out", Linkname: "..", Typeflag: tar.TypeSymlink, Mode: 0o777},
+	} {
+		if err := redirectedTar.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = redirectedTar.Close()
+	_ = redirectedGzip.Close()
+	_ = redirectedFile.Close()
+	redirectedRoot := filepath.Join(t.TempDir(), "python")
+	_, err = extractPython(redirectedPath, redirectedRoot)
+	if want := "unsafe Python symlink python/up/out: archive parent is a symlink: python/up"; err == nil ||
+		err.Error() != want {
+		t.Fatalf("symlink under a symlinked parent: err = %v, want %q (root %s)", err, want, redirectedRoot)
+	}
 }
 
 func TestPinnedPythonArchiveRetainsFullRuntimeAndStdlib(t *testing.T) {

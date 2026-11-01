@@ -34,7 +34,9 @@ const (
 	devtoAnswerTag    = "harvester-devto-answer"
 	devtoKindArticle  = "article"
 	devtoKindComments = "comments"
-	devtoDeletedBody  = "[deleted]"
+	// devtoDeletedBody is the API's "[deleted]" placeholder as rendered: its
+	// bracket escaped.
+	devtoDeletedBody = `\[deleted]`
 )
 
 type devtoUser struct {

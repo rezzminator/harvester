@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 )
@@ -42,18 +43,40 @@ func extractNamedBinary(path, name, destination string) (returnErr error) {
 		if filepath.Base(header.Name) != name || !header.FileInfo().Mode().IsRegular() {
 			continue
 		}
-		if err := copyLimited(destination, archive, header.Size); err != nil {
+		root, err := os.OpenRoot(filepath.Dir(destination))
+		if err != nil {
+			return fmt.Errorf("open binary destination: %w", err)
+		}
+		defer func() {
+			if err := root.Close(); err != nil {
+				returnErr = errors.Join(returnErr, fmt.Errorf("close binary destination: %w", err))
+			}
+		}()
+		base := filepath.Base(destination)
+		if err := copyLimited(root, base, archive, header.Size); err != nil {
 			return err
 		}
-		return os.Chmod(destination, 0o700)
+		return root.Chmod(base, 0o700)
 	}
 	return fmt.Errorf("binary %q not found in archive", name)
 }
 
+// extractPython unpacks the Python archive under destination. Every write
+// goes through an os.Root, so no entry — nor a symlink an earlier entry made —
+// reaches outside destination.
 func extractPython(path, destination string) (pythonPath string, returnErr error) {
 	if err := os.MkdirAll(destination, 0o700); err != nil {
 		return "", fmt.Errorf("create Python extraction root: %w", err)
 	}
+	root, err := os.OpenRoot(destination)
+	if err != nil {
+		return "", fmt.Errorf("open Python extraction root: %w", err)
+	}
+	defer func() {
+		if err := root.Close(); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("close Python extraction root %s: %w", destination, err))
+		}
+	}()
 	input, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -86,35 +109,31 @@ func extractPython(path, destination string) (pythonPath string, returnErr error
 		if err != nil {
 			return "", err
 		}
-		destinationPath := filepath.Join(destination, filepath.FromSlash(name))
-		if header.Typeflag == tar.TypeXGlobalHeader || header.Typeflag == tar.TypeXHeader ||
-			header.Typeflag == tar.TypeGNULongName ||
-			header.Typeflag == tar.TypeGNULongLink {
-			continue
-		}
 		switch header.Typeflag {
+		case tar.TypeXGlobalHeader, tar.TypeXHeader, tar.TypeGNULongName, tar.TypeGNULongLink:
+			continue
 		case tar.TypeDir:
-			if err := ensureArchiveParentSafe(destination, destinationPath); err != nil {
-				return "", err
-			}
-			if err := os.MkdirAll(destinationPath, header.FileInfo().Mode().Perm()); err != nil {
+			if err := root.MkdirAll(name, header.FileInfo().Mode().Perm()); err != nil {
 				return "", fmt.Errorf("create Python directory %s: %w", name, err)
 			}
+			continue
+		case tar.TypeReg, tar.TypeSymlink, tar.TypeLink:
+			if err := root.MkdirAll(pathpkg.Dir(name), 0o700); err != nil {
+				return "", fmt.Errorf("create Python parent directory %s: %w", name, err)
+			}
+		default:
+			return "", fmt.Errorf("unsupported Python archive entry %s (type %d)", name, header.Typeflag)
+		}
+		switch header.Typeflag {
 		case tar.TypeReg:
 			if header.Size < 0 || header.Size > 512<<20 || total > 2<<30-header.Size {
 				return "", fmt.Errorf("python archive is too large at %d bytes", total+header.Size)
 			}
-			if err := ensureArchiveParentSafe(destination, destinationPath); err != nil {
-				return "", err
-			}
-			if err := os.MkdirAll(filepath.Dir(destinationPath), 0o700); err != nil {
-				return "", fmt.Errorf("create Python parent directory: %w", err)
-			}
-			if err := copyLimited(destinationPath, archive, header.Size); err != nil {
+			if err := copyLimited(root, name, archive, header.Size); err != nil {
 				return "", fmt.Errorf("extract Python file %s: %w", name, err)
 			}
 			total += header.Size
-			if err := os.Chmod(destinationPath, header.FileInfo().Mode().Perm()); err != nil {
+			if err := root.Chmod(name, header.FileInfo().Mode().Perm()); err != nil {
 				return "", fmt.Errorf("preserve Python file mode %s: %w", name, err)
 			}
 		case tar.TypeSymlink:
@@ -122,13 +141,10 @@ func extractPython(path, destination string) (pythonPath string, returnErr error
 			if err != nil {
 				return "", fmt.Errorf("unsafe Python symlink %s: %w", name, err)
 			}
-			if err := ensureArchiveParentSafe(destination, destinationPath); err != nil {
-				return "", err
+			if err := symlinkFreeParent(root, name); err != nil {
+				return "", fmt.Errorf("unsafe Python symlink %s: %w", name, err)
 			}
-			if err := os.MkdirAll(filepath.Dir(destinationPath), 0o700); err != nil {
-				return "", err
-			}
-			if err := os.Symlink(target, destinationPath); err != nil {
+			if err := root.Symlink(target, name); err != nil {
 				return "", fmt.Errorf("extract Python symlink %s: %w", name, err)
 			}
 		case tar.TypeLink:
@@ -136,23 +152,14 @@ func extractPython(path, destination string) (pythonPath string, returnErr error
 			if err != nil {
 				return "", fmt.Errorf("unsafe Python hardlink %s: %w", name, err)
 			}
-			if err := ensureArchiveParentSafe(destination, destinationPath); err != nil {
-				return "", err
-			}
-			if err := os.MkdirAll(filepath.Dir(destinationPath), 0o700); err != nil {
-				return "", err
-			}
-			if err := os.Link(filepath.Join(destination, filepath.FromSlash(target)), destinationPath); err != nil {
+			if err := root.Link(target, name); err != nil {
 				return "", fmt.Errorf("extract Python hardlink %s: %w", name, err)
 			}
-		default:
-			return "", fmt.Errorf("unsupported Python archive entry %s (type %d)", name, header.Typeflag)
 		}
 	}
 	for _, relative := range []string{"python/bin/python3", "python/bin/python"} {
-		candidate := filepath.Join(destination, filepath.FromSlash(relative))
-		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
-			return candidate, nil
+		if info, err := root.Stat(relative); err == nil && info.Mode().IsRegular() {
+			return filepath.Join(destination, filepath.FromSlash(relative)), nil
 		}
 	}
 	return "", errors.New("python executable not found in extracted archive")
@@ -183,58 +190,41 @@ func safeSymlinkTarget(entry, linkname string) (string, error) {
 	return filepath.ToSlash(filepath.Clean(linkname)), nil
 }
 
-func ensureArchiveParentSafe(root, path string) error {
-	relative, err := filepath.Rel(root, filepath.Dir(path))
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("archive path escapes extraction root: %s", path)
-	}
-	current := root
-	if info, err := os.Lstat(current); err != nil || !info.IsDir() {
+// symlinkFreeParent refuses a symlink entry under a symlinked directory:
+// safeSymlinkTarget judges the target against the entry's path as written,
+// which holds only when no parent redirects it. os.Root contains every write
+// but not where a new symlink points.
+func symlinkFreeParent(root *os.Root, name string) error {
+	for dir := pathpkg.Dir(name); dir != "."; dir = pathpkg.Dir(dir) {
+		info, err := root.Lstat(dir)
 		if err != nil {
-			return fmt.Errorf("inspect extraction root: %w", err)
-		}
-		return fmt.Errorf("extraction root is not a directory: %s", root)
-	}
-	for _, part := range strings.Split(relative, string(filepath.Separator)) {
-		if part == "." || part == "" {
-			continue
-		}
-		current = filepath.Join(current, part)
-		info, err := os.Lstat(current)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("inspect archive parent %s: %w", current, err)
+			return fmt.Errorf("inspect archive parent %s: %w", dir, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("archive parent is a symlink: %s", current)
-		}
-		if !info.IsDir() {
-			return fmt.Errorf("archive parent is not a directory: %s", current)
+			return fmt.Errorf("archive parent is a symlink: %s", dir)
 		}
 	}
 	return nil
 }
 
-func copyLimited(destination string, source io.Reader, size int64) error {
+// copyLimited writes exactly size bytes of source to name, a new file under
+// root; a short or failed copy leaves no file behind.
+func copyLimited(root *os.Root, name string, source io.Reader, size int64) error {
 	if size < 0 || size > 512<<20 {
 		return fmt.Errorf("archive file size %d exceeds limit", size)
 	}
-	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
+	output, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
 	if err != nil {
 		return err
 	}
 	written, err := io.Copy(output, io.LimitReader(source, size))
+	if err == nil && written != size {
+		err = fmt.Errorf("archive entry ended at %d bytes, want %d", written, size)
+	}
 	if err != nil {
 		_ = output.Close()
-		_ = os.Remove(destination)
+		_ = root.Remove(name)
 		return err
-	}
-	if written != size {
-		_ = output.Close()
-		_ = os.Remove(destination)
-		return fmt.Errorf("archive entry ended at %d bytes, want %d", written, size)
 	}
 	return output.Close()
 }
