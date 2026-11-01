@@ -3,6 +3,7 @@ module github.com/rezzminator/harvester
 go 1.27.1
 
 require (
+	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/andybalholm/brotli v1.2.7
 	github.com/bogdanfinn/fhttp v0.7.3
 	github.com/bogdanfinn/tls-client v1.18.0
@@ -15,6 +16,7 @@ require (
 )
 
 require (
+	github.com/JohannesKaufmann/dom v0.3.1 // indirect
 	github.com/bdandy/go-errors v1.2.2 // indirect
 	github.com/bdandy/go-socks4 v1.2.3 // indirect
 	github.com/bogdanfinn/quic-go-utls v1.0.13-utls // indirect

@@ -136,26 +136,68 @@ func TestSiteExtractParseFailuresAreLogged(t *testing.T) {
 
 // TestMarkdownRendererKeepsRichTextStructure pins the rich-text renderer the
 // per-site extractors share: headings, ordered and nested lists, hard breaks,
-// quotes, code and relative links resolved against the site.
+// quotes, code and relative links resolved against the site; literal Markdown
+// characters escaped, tables with their separator row, and inline code holding
+// a backtick.
 func TestMarkdownRendererKeepsRichTextStructure(t *testing.T) {
 	t.Parallel()
-	fragment := `<div><h2>Steps</h2><ol><li><p>Install it</p><ul><li>with <em>care</em></li></ul></li>` +
-		`<li>Run <code>tool --go</code></li></ol><p>line one<br>line two</p>` +
-		`<blockquote><p>quoted</p></blockquote><p>See <a href="/wiki/faq">the FAQ</a>.</p>` +
-		`<button>Reply</button><pre><code>a  b
-  c</code></pre></div>`
-	doc, err := html.Parse(strings.NewReader(fragment))
-	if err != nil {
-		t.Fatal(err)
-	}
 	base, err := url.Parse("https://forum.example.test/")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := strings.Join(markdownRenderer{base: base}.blocks(firstElement(doc, "body")), "\n\n")
-	want := "## Steps\n\n1. Install it\n\n   - with *care*\n2. Run `tool --go`\n\nline one  \nline two\n\n" +
-		"> quoted\n\nSee [the FAQ](https://forum.example.test/wiki/faq).\n\n```\na  b\n  c\n```"
-	if got != want {
-		t.Fatalf("rendered markdown:\n%s\n--- want:\n%s", got, want)
+	for _, tc := range []struct {
+		name, fragment, want string
+	}{
+		{
+			name: "structure",
+			fragment: `<div><h2>Steps</h2><ol><li><p>Install it</p><ul><li>with <em>care</em></li></ul></li>` +
+				`<li>Run <code>tool --go</code></li></ol><p>line one<br>line two</p>` +
+				`<blockquote><p>quoted</p></blockquote><p>See <a href="/wiki/faq">the FAQ</a>.</p>` +
+				`<button>Reply</button><pre><code>a  b
+  c</code></pre></div>`,
+			want: "## Steps\n\n1. Install it\n   \n   - with *care*\n2. Run `tool --go`\n\nline one  \nline two\n\n" +
+				"> quoted\n\nSee [the FAQ](https://forum.example.test/wiki/faq).\n\n```\na  b\n  c\n```",
+		},
+		{
+			name:     "escaped characters",
+			fragment: `<p>*not emphasis* and [not a link]</p>`,
+			want:     `\*not emphasis* and \[not a link]`,
+		},
+		{
+			name:     "table",
+			fragment: `<table><tr><th>Name</th><th>Score</th></tr><tr><td>alpha</td><td>3</td></tr></table>`,
+			want:     "| Name  | Score |\n|-------|-------|\n| alpha | 3     |",
+		},
+		{
+			name:     "links to nothing render as text",
+			fragment: `<p><a href="#top">top</a> and <a href="javascript:void(0)">run</a></p>`,
+			want:     "top and run",
+		},
+		{
+			name:     "inline code holding a backtick",
+			fragment: "<p>Run <code>echo `date`</code> now</p>",
+			want:     "Run ``echo `date` `` now",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := html.Parse(strings.NewReader(tc.fragment))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var before, after strings.Builder
+			if err := html.Render(&before, doc); err != nil {
+				t.Fatal(err)
+			}
+			got := strings.Join(markdownRenderer{base: base}.blocks(firstElement(doc, "body")), "\n\n")
+			if got != tc.want {
+				t.Fatalf("rendered markdown:\n%s\n--- want:\n%s", got, tc.want)
+			}
+			if err := html.Render(&after, doc); err != nil {
+				t.Fatal(err)
+			}
+			if after.String() != before.String() {
+				t.Fatalf("rendering changed the page:\n%s\n--- want:\n%s", after.String(), before.String())
+			}
+		})
 	}
 }

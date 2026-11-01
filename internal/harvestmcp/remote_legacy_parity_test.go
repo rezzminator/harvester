@@ -346,6 +346,9 @@ func TestRemoteLegacy_AuthorizationMetadataAdvertisesS256DCRAndAuthMethods(t *te
 	if strings.Contains(rec.Body.String(), "offline_access") {
 		t.Fatal("authorization metadata advertised offline_access")
 	}
+	if jwks, ok := value["jwks_uri"]; ok {
+		t.Fatalf("authorization metadata advertised jwks_uri %q, want it left out: %s", jwks, rec.Body.String())
+	}
 	if fmt.Sprint(value["token_endpoint_auth_methods_supported"]) != "[none client_secret_post client_secret_basic]" ||
 		fmt.Sprint(
 			value["revocation_endpoint_auth_methods_supported"],
