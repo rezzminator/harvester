@@ -1,0 +1,23 @@
+{
+  "name": "professor",
+  "description": "Fetches, converts, caches and searches documents through the harvester CLI and MCP tools.",
+  "owner": {
+    "name": "rezzminator",
+    "url": "https://github.com/rezzminator/harvester"
+  },
+  "plugins": [
+    {
+      "name": "harvester",
+      "source": "./plugins/harvester",
+      "description": "Fetches, converts, caches and searches documents through the harvester CLI and MCP tools.",
+      "homepage": "https://github.com/rezzminator/harvester",
+      "license": "MIT",
+      "keywords": [
+        "claude-code",
+        "mcp",
+        "documents",
+        "search"
+      ]
+    }
+  ]
+}

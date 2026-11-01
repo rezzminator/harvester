@@ -11,7 +11,7 @@ import (
 )
 
 // logRows is the activity log's destination: the io.Writer behind the JSON handler. Each write is one slog
-// record, turned into a plugin-log row and handed to the vendored plugin-log library, which owns the level
+// record, turned into a plugin-log row and handed to the plugin-log module, which owns the level
 // files, the row bound, rotation and the rows held across a failed write (plugins/CLAUDE.md § Logging).
 type logRows struct {
 	logger *pluginlog.Logger
