@@ -2,6 +2,15 @@
 
 Every release of harvester. Versions follow [semantic versioning](https://semver.org); each release is the `main` commit tagged `v<version>`, with a GitHub release.
 
+## [0.2.1] — 2026-11-01
+
+### Changed
+
+- **Claude Code installs harvester from this repository again.** The repository root carries a Claude marketplace named `professor`, so `claude plugin marketplace add rezzminator/harvester` followed by `claude plugin install harvester@professor` installs it; an install made from the professor marketplace keeps working under the same `harvester@professor` name.
+- Pages read from forums and Q&A sites convert to cleaner Markdown: tables keep their columns and separator row, a code block keeps its language tag (a fenced `bash` block stays `bash`), inline code holding a backtick is fenced so it stays intact, links that lead nowhere (`#top`, `javascript:`) show as plain text, and literal `*` and `[` in the page text are escaped so they no longer read as emphasis or links.
+- Setting up the conversion runtime refuses an archive that writes a link through a linked parent directory to reach outside the install root.
+- Updated network and compression dependencies.
+
 ## [0.2.0] — 2026-10-30
 
 ### Changed
