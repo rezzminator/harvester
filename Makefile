@@ -38,8 +38,7 @@ check:
 # LEAK_TERMS names the terms file (CI writes the secret to one); unset, scripts/leak-terms.txt.
 leak: SHELL := bash
 leak:
-	mapfile -d '' -t sources < <(git ls-files -z); \
-	scripts/leak-check.sh --files "$${sources[@]}"
+	git ls-files -z | xargs -0 scripts/leak-check.sh --files
 
 # The version must move past main's VERSION, then the committed sums must match a fresh build.
 release:
