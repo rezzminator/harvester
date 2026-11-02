@@ -26,7 +26,7 @@ func TestProcessLookupArgumentsAndUsage(t *testing.T) {
 			capture := filepath.Join(root, "captured")
 			reply := `printf '%s\n' '{"result":"answer","usage":{"input_tokens":10,"cache_read_input_tokens":3,"cache_creation_input_tokens":4,"output_tokens":2}}'`
 			model := "haiku"
-			wantArgs := "-p|--model|haiku|--effort|high|--output-format|json|"
+			wantArgs := "-p|--model|haiku|--effort|high|--output-format|json|--no-session-persistence|"
 			if id == engine.Codex {
 				model = "gpt-fixture"
 				wantArgs = `exec|--model|gpt-fixture|-c|model_reasoning_effort="high"|--json|--ephemeral|--skip-git-repo-check|--color|never|`

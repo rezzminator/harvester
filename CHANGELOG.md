@@ -2,6 +2,12 @@
 
 Every release of harvester. Versions follow [semantic versioning](https://semver.org); each release is the `main` commit tagged `v<version>`, with a GitHub release.
 
+## [Unreleased]
+
+### Fixed
+
+- A Claude `ask` no longer leaves a resumable chat behind: it runs with `--no-session-persistence`, so Claude Code saves no session for it, as Codex's `--ephemeral` already did.
+
 ## [0.2.2] — 2026-11-01
 
 ### Fixed

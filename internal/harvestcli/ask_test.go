@@ -34,7 +34,7 @@ func TestHarvestAskRunsBothConfiguredAdapters(t *testing.T) {
 			model:    "claude-fixture-model",
 			effort:   "low",
 			homeEnv:  "CLAUDE_CONFIG_DIR",
-			wantArgs: "-p|--model|claude-fixture-model|--effort|low|--output-format|json|",
+			wantArgs: "-p|--model|claude-fixture-model|--effort|low|--output-format|json|--no-session-persistence|",
 			configure: func(machine *config.Config, binary, accountHome string) {
 				machine.Claude = config.Claude{Binary: binary}
 
@@ -47,7 +47,7 @@ func TestHarvestAskRunsBothConfiguredAdapters(t *testing.T) {
 			effort:   "low",
 			flags:    []string{"--model", " Haiku"},
 			homeEnv:  "CLAUDE_CONFIG_DIR",
-			wantArgs: "-p|--model|haiku|--effort|low|--output-format|json|",
+			wantArgs: "-p|--model|haiku|--effort|low|--output-format|json|--no-session-persistence|",
 			configure: func(machine *config.Config, binary, accountHome string) {
 				machine.Claude = config.Claude{Binary: binary}
 

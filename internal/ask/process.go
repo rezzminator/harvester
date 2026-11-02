@@ -85,7 +85,8 @@ func (runner processEngine) Run(parent context.Context, input AskInput) (AskResu
 		if input.Effort != "" {
 			args = append(args, "--effort", input.Effort)
 		}
-		args = append(args, "--output-format", "json")
+		// A one-shot ask saves no session: it would stay listed as a resumable chat, as Codex's --ephemeral avoids.
+		args = append(args, "--output-format", "json", "--no-session-persistence")
 	} else {
 		args = append(args, "exec")
 		if input.Model != "" {
