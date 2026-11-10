@@ -56,7 +56,24 @@ func resolveProcess(id engine.ID, machine config.Config) (Engine, error) {
 	}
 	return processEngine{binary: path, engine: id}, nil
 }
-func (runner processEngine) Run(parent context.Context, input AskInput) (AskResult, error) {
+func (runner processEngine) Run(parent context.Context, input AskInput) (_ AskResult, returnErr error) {
+	name := engine.MustLookup(runner.engine).LongName
+	timeout := input.Timeout
+	if timeout == 0 {
+		timeout = engineBudget(len(input.ContentFiles))
+	}
+	asked := clock.Real.Now()
+	// logged is the failure as the log keeps it: never the engine's stdout, which can quote what it read.
+	var logged error
+	defer func() {
+		if returnErr == nil {
+			return
+		}
+		if logged == nil {
+			logged = returnErr
+		}
+		obs.Logger(parent).Warn("ask.failed", "engine", name, "timeout_ms", timeout.Milliseconds(), obs.FieldDur, clock.Real.Now().Sub(asked).Milliseconds(), obs.FieldErr, logged.Error())
+	}()
 	prompt, err := BuildPrompt(input)
 	if err != nil {
 		return AskResult{}, err
@@ -66,10 +83,6 @@ func (runner processEngine) Run(parent context.Context, input AskInput) (AskResu
 		if err != nil {
 			return AskResult{}, err
 		}
-	}
-	timeout := input.Timeout
-	if timeout == 0 {
-		timeout = engineTimeout
 	}
 	if timeout < 0 {
 		return AskResult{}, fmt.Errorf("timeout must be zero or positive")
@@ -85,6 +98,9 @@ func (runner processEngine) Run(parent context.Context, input AskInput) (AskResu
 		if input.Effort != "" {
 			args = append(args, "--effort", input.Effort)
 		}
+		// The ask reads only its content files: no MCP server (each one a process the boot waits on, the
+		// harvester's own among them), no skill, and only the file-reading tools.
+		args = append(args, "--strict-mcp-config", "--disable-slash-commands", "--tools", "Read,Grep")
 		// A one-shot ask saves no session: it would stay listed as a resumable chat, as Codex's --ephemeral avoids.
 		args = append(args, "--output-format", "json", "--no-session-persistence")
 	} else {
@@ -95,7 +111,9 @@ func (runner processEngine) Run(parent context.Context, input AskInput) (AskResu
 		if input.Effort != "" {
 			args = append(args, "-c", "model_reasoning_effort="+strconv.Quote(input.Effort))
 		}
-		args = append(args, "--json", "--ephemeral", "--skip-git-repo-check", "--color", "never")
+		// No plugin: an installed harvester plugin's MCP server would start an older harvester service that
+		// replaces the one serving this ask (Codex has no switch that clears its MCP servers, -c mcp_servers={} included).
+		args = append(args, "--disable", "plugins", "--json", "--ephemeral", "--skip-git-repo-check", "--color", "never")
 	}
 	streams := make([]*os.File, 0, 3)
 	defer func() {
@@ -112,10 +130,9 @@ func (runner processEngine) Run(parent context.Context, input AskInput) (AskResu
 	}
 	started := clock.Real.Now()
 	runErr := runProcess(ctx, args, deps.StartOptions{Env: processEnvironment(), Stdin: streams[0], Stdout: streams[1], Stderr: streams[2], ProcessGroup: true})
-	name := engine.MustLookup(runner.engine).LongName
 	if ctx.Err() != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return AskResult{}, fmt.Errorf("%s ask timed out: %w", name, context.DeadlineExceeded)
+			return AskResult{}, fmt.Errorf("%s ask timed out after %s: %w", name, timeout, context.DeadlineExceeded)
 		}
 		return AskResult{}, fmt.Errorf("%s ask canceled: %w", name, ctx.Err())
 	}
@@ -136,6 +153,7 @@ func (runner processEngine) Run(parent context.Context, input AskInput) (AskResu
 		log.Warn("ask.stderr.truncated", "reason", fmt.Sprintf("%s stderr exceeded the %d-byte capture limit; the rest was not kept", name, maxCapturedOutput))
 	}
 	if runErr != nil {
+		logged = fmt.Errorf("%s ask failed: %w; stderr tail %q", name, runErr, boundedTail(stderr, 1024))
 		return AskResult{}, fmt.Errorf("%s ask failed: %w; stderr tail %q; stdout tail %q", name, runErr, boundedTail(stderr, 1024), boundedTail(stdout, 1024))
 	}
 	output := processOutput{Stdout: stdout}

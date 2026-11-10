@@ -26,10 +26,10 @@ func TestProcessLookupArgumentsAndUsage(t *testing.T) {
 			capture := filepath.Join(root, "captured")
 			reply := `printf '%s\n' '{"result":"answer","usage":{"input_tokens":10,"cache_read_input_tokens":3,"cache_creation_input_tokens":4,"output_tokens":2}}'`
 			model := "haiku"
-			wantArgs := "-p|--model|haiku|--effort|high|--output-format|json|--no-session-persistence|"
+			wantArgs := "-p|--model|haiku|--effort|high|--strict-mcp-config|--disable-slash-commands|--tools|Read,Grep|--output-format|json|--no-session-persistence|"
 			if id == engine.Codex {
 				model = "gpt-fixture"
-				wantArgs = `exec|--model|gpt-fixture|-c|model_reasoning_effort="high"|--json|--ephemeral|--skip-git-repo-check|--color|never|`
+				wantArgs = `exec|--model|gpt-fixture|-c|model_reasoning_effort="high"|--disable|plugins|--json|--ephemeral|--skip-git-repo-check|--color|never|`
 				reply = `printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"answer"}}' '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":3,"cache_creation_input_tokens":4,"output_tokens":2}}'`
 			}
 			script := "#!/bin/sh\nprintf '%s|' \"$@\" > \"$ASK_CAPTURE\"\nprintf '\\n' >> \"$ASK_CAPTURE\"\nprintf 'identity=%s,%s,%s\\n' \"${CLAUDECODE-}\" \"${CLAUDE_CODE_SESSION_ID-}\" \"${CODEX_THREAD_ID-}\" >> \"$ASK_CAPTURE\"\ncat >> \"$ASK_CAPTURE\"\n" + reply + "\n"
@@ -80,14 +80,25 @@ func TestProcessReportsMissingCrashTimeoutAndEmpty(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct {
-		name, body, want string
-		timeout          time.Duration
+		name, body, want, wantLogged string
+		timeout                      time.Duration
 	}{
-		{"crash", "cat >/dev/null\nprintf 'fixture failure' >&2\nexit 7\n", "fixture failure", time.Second},
-		{"empty", "cat >/dev/null\nprintf '%s' '{\"result\":\"\"}'\n", "no answer", time.Second},
-		{"timeout", "cat >/dev/null\nsleep 30 &\nwait\n", "timed out", 25 * time.Millisecond},
+		{
+			"crash", "cat >/dev/null\nprintf 'fixture failure' >&2\nprintf 'page body quoted' \nexit 7\n",
+			`claude ask failed: exit status 7; stderr tail "fixture failure"; stdout tail "page body quoted"`,
+			`claude ask failed: exit status 7; stderr tail "fixture failure"`, time.Second,
+		},
+		{
+			"empty", "cat >/dev/null\nprintf '%s' '{\"result\":\"\"}'\n", "claude ask failed: cc headless output contains no answer",
+			"claude ask failed: cc headless output contains no answer", time.Second,
+		},
+		{
+			"timeout", "cat >/dev/null\nsleep 30 &\nwait\n", "claude ask timed out after 25ms: context deadline exceeded",
+			"claude ask timed out after 25ms: context deadline exceeded", 25 * time.Millisecond,
+		},
 		{
 			"stdout overflow", fmt.Sprintf("cat >/dev/null\nhead -c %d /dev/zero\n", maxCapturedOutput+1),
+			"claude ask failed: normalized headless output exceeded the 8388608-byte capture limit",
 			"claude ask failed: normalized headless output exceeded the 8388608-byte capture limit", 30 * time.Second,
 		},
 	} {
@@ -100,9 +111,28 @@ func TestProcessReportsMissingCrashTimeoutAndEmpty(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = runner.Run(context.Background(), AskInput{ContentFiles: []string{"source.md"}, SourceLabels: []string{"source"}, Prompt: "Question", Timeout: tc.timeout})
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
+			ctx, recorder := obs.Test(t)
+			began := time.Now()
+			_, err = runner.Run(ctx, AskInput{ContentFiles: []string{"source.md"}, SourceLabels: []string{"source"}, Prompt: "Question", Timeout: tc.timeout})
+			elapsed := time.Since(began)
+			if err == nil || err.Error() != tc.want {
 				t.Fatalf("error=%v want=%s", err, tc.want)
+			}
+			var failures []obs.Record
+			for _, record := range recorder.Records() {
+				if record.Message == "ask.failed" {
+					failures = append(failures, record)
+				}
+			}
+			if len(failures) != 1 {
+				t.Fatalf("ask.failed records = %d, want 1 (log %s)", len(failures), recorder.Raw())
+			}
+			fields := failures[0].Fields
+			duration, isNumber := fields[obs.FieldDur].(float64)
+			if failures[0].Level != "WARN" || fields["engine"] != "claude" || fields["timeout_ms"] != float64(tc.timeout.Milliseconds()) ||
+				fields[obs.FieldErr] != tc.wantLogged || !isNumber || duration < 0 || duration > float64(elapsed.Milliseconds()) {
+				t.Fatalf("ask.failed = %s %+v, want WARN engine=claude timeout_ms=%d %s=%q and %s within %s (log %s)",
+					failures[0].Level, fields, tc.timeout.Milliseconds(), obs.FieldErr, tc.wantLogged, obs.FieldDur, elapsed, recorder.Raw())
 			}
 			if tc.name == "timeout" && !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("timeout lost cause: %v", err)

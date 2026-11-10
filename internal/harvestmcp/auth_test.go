@@ -270,3 +270,52 @@ func asString(value any) string {
 	text, _ := value.(string)
 	return text
 }
+
+// TestHandedOffGatewayWritesNoCredentials: once a replaced daemon hands its gateway off, a register,
+// token or revoke answers 503 temporarily_unavailable and leaves the state file as it was, so the
+// successor, which loads that file, keeps every client and refresh token, the one issued last included.
+func TestHandedOffGatewayWritesNoCredentials(t *testing.T) {
+	server := legacyNewRemote(t, legacyPublicURL, legacyPass, "")
+	clientID, _, _ := legacyRegister(t, server, tokenAuthNone, legacyRedirect)
+	code, verifier := legacyAuthorizationCode(t, server, clientID)
+	issued, rec := legacyToken(t, server, url.Values{
+		"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {legacyRedirect},
+		"client_id": {clientID}, "code_verifier": {verifier},
+	}, nil)
+	if rec.Code != http.StatusOK || issued.RefreshToken == "" {
+		t.Fatalf("token before handoff = %d %s", rec.Code, rec.Body.String())
+	}
+	before, err := os.ReadFile(server.store.statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.HandOff()
+	register, err := json.Marshal(map[string]any{
+		"client_name": "test", "redirect_uris": []string{legacyRedirect}, "grant_types": []string{"authorization_code"},
+		"response_types": []string{"code"}, "token_endpoint_auth_method": tokenAuthNone, "scope": HarvesterScope,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range []struct{ path, body, contentType string }{
+		{"/register", string(register), "application/json"},
+		{"/token", url.Values{"grant_type": {"refresh_token"}, "refresh_token": {issued.RefreshToken}, "client_id": {clientID}}.Encode(), "application/x-www-form-urlencoded"},
+		{"/revoke", url.Values{"token": {issued.RefreshToken}, "client_id": {clientID}}.Encode(), "application/x-www-form-urlencoded"},
+	} {
+		answer := legacyDo(t, server, http.MethodPost, call.path, call.body, call.contentType, nil)
+		if answer.Code != http.StatusServiceUnavailable || legacyJSON(t, answer)["error"] != "temporarily_unavailable" {
+			t.Fatalf("%s after handoff = %d %s, want 503 temporarily_unavailable", call.path, answer.Code, answer.Body.String())
+		}
+	}
+	after, err := os.ReadFile(server.store.statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("handed-off gateway rewrote %s:\nbefore %s\nafter  %s", server.store.statePath, before, after)
+	}
+	successor := newAuthStore(legacyPublicURL, legacyPublicURL+"/mcp", legacyPass, "", server.store.statePath)
+	if refreshed, code := successor.refreshExchange(issued.RefreshToken, clientID, ""); code != "" || refreshed.AccessToken == "" {
+		t.Fatalf("successor refresh = %+v %q, want a new token pair", refreshed, code)
+	}
+}

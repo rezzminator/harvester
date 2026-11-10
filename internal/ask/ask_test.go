@@ -1,10 +1,12 @@
 package ask
 
 import (
+	"fmt"
 	"github.com/rezzminator/harvester/internal/config"
 	"github.com/rezzminator/harvester/internal/engine"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCheckModelFamilies(t *testing.T) {
@@ -43,6 +45,24 @@ func TestResolveInputAndEvidencePrompt(t *testing.T) {
 	}
 	if input.Model != "haiku" || input.Effort != "low" {
 		t.Fatalf("input=%+v", input)
+	}
+	// An ask's deadline grows with its content files, up to a ceiling; one the caller set stands.
+	for _, tc := range []struct {
+		files   int
+		timeout time.Duration
+		want    time.Duration
+	}{
+		{1, 0, 150 * time.Second}, {15, 0, 570 * time.Second}, {16, 0, 10 * time.Minute}, {17, 0, 10 * time.Minute},
+		{1, 5 * time.Second, 5 * time.Second},
+	} {
+		files := make([]string, tc.files)
+		for index := range files {
+			files[index] = fmt.Sprintf("prepared-%d.md", index+1)
+		}
+		resolved, err := ResolveInput(AskInput{ContentFiles: files, Prompt: "Find evidence", Engine: engine.Claude, Timeout: tc.timeout}, config.Config{})
+		if err != nil || resolved.Timeout != tc.want {
+			t.Fatalf("ResolveInput(%d files, timeout %s).Timeout = %s, %v; want %s", tc.files, tc.timeout, resolved.Timeout, err, tc.want)
+		}
 	}
 	for _, input := range []AskInput{{}, {ContentFiles: []string{"file"}, Prompt: " "}, {ContentFiles: []string{" "}, Prompt: "Q"}, {ContentFiles: []string{"file"}, Prompt: "Q", SourceLabels: []string{"a", "b"}}} {
 		if _, err := ResolveInput(input, config.Config{}); err == nil {

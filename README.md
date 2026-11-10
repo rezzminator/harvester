@@ -146,7 +146,10 @@ the daemon's captured output is `daemon.log` (mode `0600`) in the log directory 
 it detached on demand; it remains running after clients exit. It checks the
 installed binary's version once per session and again on a daemon reconnect; it
 also rechecks a binary replaced during startup. An older proxy accepts a newer
-daemon and never downgrades it.
+daemon and never downgrades it, and an older installed build never replaces a
+newer running daemon. When a new version or configuration replaces the daemon,
+the successor takes the socket at once and serves new calls; the calls the
+replaced daemon already took finish on it, for up to 30 minutes.
 `harvester setup` refreshes the daemon after setup to apply current
 configuration. `harvester status [--json]` reports the daemon, and
 `harvester stop` drains and stops it.

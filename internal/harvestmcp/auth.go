@@ -38,6 +38,7 @@ const (
 	oauthErrorInvalidGrant     = "invalid_grant"
 	oauthErrorInvalidTarget    = "invalid_target"
 	oauthErrorServer           = "server_error"
+	storeHandedOff             = "handed_off" // the store's answer once handOff ran: the endpoint answers 503
 	authCodeTTL                = 5 * time.Minute
 	accessTokenTTL             = time.Hour
 	consentTTL                 = 10 * time.Minute
@@ -180,6 +181,17 @@ type authStore struct {
 	// mint issues consent's authorization codes: tokenURLSafe, replaced only
 	// by a test that must drive the entropy-failure branch.
 	mint func(size int) (string, error)
+	// handedOff is set by handOff: this store writes the state file no more, its successor owns it.
+	handedOff bool
+}
+
+// handOff stops every credential write: a register, token or revoke after it fails with storeHandedOff,
+// so its client retries on the successor, which loads the state file only after this returns. A write
+// in flight holds mu, so it has landed by then.
+func (s *authStore) handOff() {
+	s.mu.Lock()
+	s.handedOff = true
+	s.mu.Unlock()
 }
 
 func newAuthStore(issuer, resource, passphrase, staticToken, statePath string, clocks ...clock.Clock) *authStore {
@@ -345,6 +357,9 @@ func (s *authStore) register(c persistedClient) (persistedClient, string, string
 	// registrations cannot all pass the check before any of them lands.
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.handedOff {
+		return persistedClient{}, "", storeHandedOff
+	}
 	if len(s.clients) >= maxRegisteredClients {
 		return persistedClient{}, "", oauthErrorTooManyClients
 	}
@@ -496,6 +511,9 @@ func (s *authStore) consent(txn, supplied, addr string) (string, bool, bool) {
 func (s *authStore) exchange(code, clientID, redirect, verifier, resource string) (tokenResponse, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.handedOff {
+		return tokenResponse{}, storeHandedOff
+	}
 	c, ok := s.codes[code]
 	if !ok || s.clock.Now().After(c.Expires) || c.ClientID != clientID || c.RedirectURI != redirect {
 		return tokenResponse{}, oauthErrorInvalidGrant
@@ -564,6 +582,9 @@ func (s *authStore) issueLocked(clientID string, scope []string) (tokenResponse,
 func (s *authStore) refreshExchange(raw, clientID, resource string) (tokenResponse, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.handedOff {
+		return tokenResponse{}, storeHandedOff
+	}
 	if resource != "" && !ResourceMatches(resource, s.resource) {
 		return tokenResponse{}, oauthErrorInvalidTarget
 	}
@@ -593,12 +614,17 @@ func (s *authStore) verify(raw string) bool {
 	return true
 }
 
-func (s *authStore) revoke(raw string) {
+// revoke reports false, revoking nothing, once the store is handed off.
+func (s *authStore) revoke(raw string) bool {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.handedOff {
+		return false
+	}
 	delete(s.access, digest(raw))
 	delete(s.refresh, digest(raw))
 	s.saveLocked()
-	s.mu.Unlock()
+	return true
 }
 
 // defaultAuthStatePath keeps the OAuth store beside — never inside — the

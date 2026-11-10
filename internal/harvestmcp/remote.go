@@ -147,6 +147,20 @@ func (r *RemoteServer) Handler() http.Handler {
 
 // Close releases the shared conversion worker. It is safe to call repeatedly,
 // which lets command setup failures clean up a partially constructed gateway.
+// HandOff stops the gateway's credential writes before a successor daemon takes over the state file:
+// every later register, token or revoke answers 503 temporarily_unavailable, so its client retries on
+// the successor. It returns once a write in flight has landed.
+func (r *RemoteServer) HandOff() {
+	if r != nil && r.store != nil {
+		r.store.handOff()
+	}
+}
+
+// handedOffError answers a credential request the handed-off store refused.
+func (r *RemoteServer) handedOffError(w http.ResponseWriter) {
+	r.oauthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "the harvester gateway is handing off to a restarted daemon; retry")
+}
+
 func (r *RemoteServer) Close() error {
 	if r == nil || r.service == nil {
 		return nil
@@ -314,6 +328,10 @@ func (r *RemoteServer) register(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	client, secret, code := r.store.register(input)
+	if code == storeHandedOff {
+		r.handedOffError(w)
+		return
+	}
 	if code == oauthErrorTooManyClients {
 		r.oauthError(
 			w,
@@ -580,6 +598,10 @@ func (r *RemoteServer) token(w http.ResponseWriter, req *http.Request) {
 		r.oauthError(w, http.StatusBadRequest, "unsupported_grant_type", "grant_type is not supported")
 		return
 	}
+	if code == storeHandedOff {
+		r.handedOffError(w)
+		return
+	}
 	if code != "" {
 		r.oauthError(w, http.StatusBadRequest, code, tokenErrorDescription(code))
 		return
@@ -656,7 +678,10 @@ func (r *RemoteServer) revoke(w http.ResponseWriter, req *http.Request) {
 		r.oauthError(w, http.StatusBadRequest, "invalid_client", "client authentication failed")
 		return
 	}
-	r.store.revoke(req.Form.Get("token"))
+	if !r.store.revoke(req.Form.Get("token")) {
+		r.handedOffError(w)
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Access-Control-Allow-Origin", "*")

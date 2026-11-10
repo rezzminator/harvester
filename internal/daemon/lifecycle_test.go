@@ -137,6 +137,7 @@ func TestServeSingletonPermissionsAndNoIdleExit(t *testing.T) {
 
 func TestEnsureStartsDetachedRecoversAndDoesNotDowngradeOldProxy(t *testing.T) {
 	runtime := daemonFixture(t)
+	t.Setenv("HARVESTER_DAEMON_TEST_VERSION", "0.1.0")
 	first, err := Ensure(t.Context(), runtime)
 	if err != nil {
 		t.Fatal(err)
@@ -162,6 +163,15 @@ func TestEnsureStartsDetachedRecoversAndDoesNotDowngradeOldProxy(t *testing.T) {
 	if err := syscall.Kill(first.PID, syscall.SIGKILL); err != nil {
 		t.Fatal(err)
 	}
+	reaped, cancelReaped := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancelReaped()
+	for syscall.Kill(first.PID, 0) != syscall.ESRCH {
+		select {
+		case <-reaped.Done():
+			t.Fatalf("the starting process never reaped its exited daemon %d: it stays a zombie", first.PID)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 	harness.write(t, `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
 	response := harness.read(t)
 	if _, ok := response["result"]; !ok {
@@ -171,9 +181,9 @@ func TestEnsureStartsDetachedRecoversAndDoesNotDowngradeOldProxy(t *testing.T) {
 	if err != nil || recovered.PID == first.PID {
 		t.Fatalf("recovery status=%+v err=%v", recovered, err)
 	}
-	t.Setenv("HARVESTER_DAEMON_TEST_VERSION", "test-v2")
+	t.Setenv("HARVESTER_DAEMON_TEST_VERSION", "0.2.0")
 	upgraded, err := Ensure(t.Context(), runtime)
-	if err != nil || upgraded.Version != "test-v2" || upgraded.PID == recovered.PID {
+	if err != nil || upgraded.Version != "0.2.0" || upgraded.PID == recovered.PID {
 		t.Fatalf("upgrade=%+v err=%v", upgraded, err)
 	}
 	harness.write(t, `{"jsonrpc":"2.0","id":4,"method":"tools/list"}`)
@@ -184,6 +194,13 @@ func TestEnsureStartsDetachedRecoversAndDoesNotDowngradeOldProxy(t *testing.T) {
 	if err != nil || after.PID != upgraded.PID {
 		t.Fatalf("old proxy downgraded/flapped daemon: %+v err=%v", after, err)
 	}
+	// An older launcher re-points the installed link at its own build: the newer daemon keeps serving.
+	t.Setenv("HARVESTER_DAEMON_TEST_VERSION", "0.1.0")
+	older, err := Ensure(t.Context(), runtime)
+	if err != nil || older.PID != upgraded.PID || older.Version != "0.2.0" {
+		t.Fatalf("an older installed build replaced the newer daemon: %+v err=%v", older, err)
+	}
+	t.Setenv("HARVESTER_DAEMON_TEST_VERSION", "0.2.0")
 	if err := os.WriteFile(runtime.Config.Path, []byte(`{"search":{"enabled":false},"output":{"maxInlineChars":1234}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -659,7 +676,7 @@ func TestStopGuardRefusesReusedPIDWithDifferentStart(t *testing.T) {
 	}
 	stale := status
 	stale.Started = stale.Started.Add(-time.Nanosecond)
-	if err := requestStop(t.Context(), runtime, stale); err == nil || !strings.Contains(err.Error(), "409") {
+	if err := requestStop(t.Context(), runtime, stale, stopShutdown); err == nil || !strings.Contains(err.Error(), "409") {
 		t.Fatalf("stale same-PID stop was accepted: %v", err)
 	}
 	current, err := Status(t.Context(), runtime)
