@@ -19,13 +19,26 @@ import (
 	"time"
 
 	"github.com/rezzminator/harvester/internal/config"
+	"github.com/rezzminator/harvester/internal/obs"
 	"github.com/rezzminator/harvester/internal/paths"
+	"golang.org/x/mod/semver"
 )
 
 const serviceMarker = "harvester-daemon"
 const startupTimeout = 15 * time.Second
 const drainTimeout = 30 * time.Second
 const cleanupTimeout = 2 * time.Second
+
+// handoffTimeout bounds the calls a replaced daemon finishes after its successor took over: longer
+// than any one call's own limits (an ask's 10 minutes after up to 15 minutes of document OCR).
+const handoffTimeout = 30 * time.Minute
+
+// A /stop in mode stopShutdown (harvester stop) drains the daemon in place; any other mode hands it
+// off to a successor, so an older proxy's replacement, which names no mode, hands off too.
+const (
+	stopShutdown = "shutdown"
+	stopHandoff  = "handoff"
+)
 
 var ErrDaemonAbsent = errors.New("harvester daemon is absent")
 var ErrDaemonUnresponsive = errors.New("harvester daemon is unresponsive")
@@ -222,7 +235,7 @@ func ensure(ctx context.Context, runtime config.Runtime, refresh bool) (StatusIn
 			if status.ConfigPath != runtime.Config.Path {
 				return StatusInfo{}, fmt.Errorf("daemon configuration mismatch at %s: running %s requested %s", status.Endpoint, status.ConfigPath, runtime.Config.Path)
 			}
-			if !status.Draining && !refresh && status.Version == expectedVersion && status.ConfigDigest == digest {
+			if !status.Draining && !refresh && keepsServing(status.Version, expectedVersion) && status.ConfigDigest == digest {
 				return status, nil
 			}
 			if !status.Draining {
@@ -256,7 +269,7 @@ func ensure(ctx context.Context, runtime config.Runtime, refresh bool) (StatusIn
 				return StatusInfo{}, err
 			}
 			if released {
-				if err := startDetached(runtime); err != nil {
+				if err := startDetached(bounded, runtime); err != nil {
 					return StatusInfo{}, fmt.Errorf("start harvester daemon; see %s: %w", paths.DaemonLog(runtime.Paths.Home), err)
 				}
 				started = true
@@ -315,7 +328,7 @@ func installedVersion(ctx context.Context, runtime config.Runtime) (string, erro
 	return fields[1], nil
 }
 
-func startDetached(runtime config.Runtime) (returnErr error) {
+func startDetached(ctx context.Context, runtime config.Runtime) (returnErr error) {
 	binary, err := executable(runtime)
 	if err != nil {
 		return err
@@ -347,17 +360,25 @@ func startDetached(runtime config.Runtime) (returnErr error) {
 	if err := command.Start(); err != nil {
 		return err
 	}
-	return command.Process.Release()
+	// Reap the daemon when it exits: a long-lived proxy that only released it kept every daemon it
+	// started as a zombie. Its own output is in the daemon log.
+	logger := obs.Logger(ctx)
+	go func() {
+		if err := command.Wait(); err != nil {
+			logger.Warn("harvester daemon exited", "target", command.Process.Pid, obs.FieldErr, err.Error(), "path", logPath)
+		}
+	}()
+	return nil
 }
 
-func requestStop(ctx context.Context, runtime config.Runtime, expected StatusInfo) error {
+func requestStop(ctx context.Context, runtime config.Runtime, expected StatusInfo, mode string) error {
 	client := unixClient(paths.DaemonSocket(runtime.Paths.Home))
 	defer client.CloseIdleConnections()
 	body, err := json.Marshal(expected)
 	if err != nil {
 		return fmt.Errorf("encode expected daemon instance: %w", err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://localhost/stop", bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://localhost/stop?mode="+mode, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -373,12 +394,24 @@ func requestStop(ctx context.Context, runtime config.Runtime, expected StatusInf
 	return nil
 }
 
+// keepsServing reports whether a daemon running version running stays when installed is the installed
+// build: the same version, or a newer release. Each launcher re-points the installed link at its own
+// build, so two installed plugin versions replaced each other's daemon, cutting its calls, when any
+// difference meant replace. A version that is not a release (dev, a test build) must match exactly.
+func keepsServing(running, installed string) bool {
+	if running == installed {
+		return true
+	}
+	runningRelease, installedRelease := "v"+running, "v"+installed
+	return semver.IsValid(runningRelease) && semver.IsValid(installedRelease) && semver.Compare(runningRelease, installedRelease) > 0
+}
+
 func sameInstance(first, second StatusInfo) bool {
 	return first.PID == second.PID && first.Started.Equal(second.Started) && first.Version == second.Version && first.Endpoint == second.Endpoint && first.ConfigPath == second.ConfigPath && first.ConfigDigest == second.ConfigDigest
 }
 
 func joinDrain(ctx context.Context, runtime config.Runtime, expected StatusInfo, readVersion func(config.Runtime) (string, error)) error {
-	stopErr := requestStop(ctx, runtime, expected)
+	stopErr := requestStop(ctx, runtime, expected, stopHandoff)
 	if stopErr == nil {
 		return nil
 	}
@@ -408,7 +441,7 @@ func joinDrain(ctx context.Context, runtime config.Runtime, expected StatusInfo,
 	if err != nil {
 		return errors.Join(stopErr, err)
 	}
-	if !sameInstance(current, expected) && !current.Draining && current.Version == version && current.ConfigDigest == digest {
+	if !sameInstance(current, expected) && !current.Draining && keepsServing(current.Version, version) && current.ConfigDigest == digest {
 		return nil
 	}
 	return stopErr
@@ -431,7 +464,7 @@ func Stop(ctx context.Context, runtime config.Runtime) error {
 			return fmt.Errorf("daemon unsafe cleanup; see %s: %s", paths.DaemonLog(runtime.Paths.Home), current.CleanupError)
 		}
 		if err == nil && !current.Draining && !sameInstance(current, stopping) {
-			if stopErr := requestStop(bounded, runtime, current); stopErr != nil {
+			if stopErr := requestStop(bounded, runtime, current, stopShutdown); stopErr != nil {
 				probe, probeErr := Status(bounded, runtime)
 				if !errors.Is(probeErr, ErrDaemonAbsent) && !(probeErr == nil && sameInstance(current, probe) && probe.Draining) {
 					return errors.Join(stopErr, probeErr)

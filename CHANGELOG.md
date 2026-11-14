@@ -2,6 +2,21 @@
 
 Every release of harvester. Versions follow [semantic versioning](https://semver.org); each release is the `main` commit tagged `v<version>`, with a GitHub release.
 
+## [Unreleased]
+
+## [0.2.3] — 2026-11-14
+
+### Fixed
+
+- An `ask` no longer times out on a loaded machine: its deadline is 2 minutes plus 30 seconds per item read, up to 10 minutes, where a flat 60 seconds cut a third of asks over one or two items, and nearly all over five; a timeout names the deadline it ran out.
+- A Claude `ask` boots lean: it starts no MCP server (each ask booted every configured server, the harvester's own among them), loads no skill and gets only the `Read` and `Grep` tools, so the engine reads only the prepared files the prompt names.
+- A Claude `ask` no longer leaves a resumable chat behind: it runs with `--no-session-persistence`, so Claude Code saves no session for it, as Codex's `--ephemeral` already did.
+- A Codex `ask` loads no plugin (`--disable plugins`), so an installed harvester plugin no longer starts an older harvester whose daemon replaced the one serving the ask, cutting it and every other call in flight.
+- The daemon no longer cuts calls in flight when it is replaced by a new version or configuration: the successor takes the socket at once and serves new calls, while the calls the replaced daemon already took finish on it, for up to 30 minutes. A replacement started by an older harvester hands off the same way. `harvester stop` still drains and stops the daemon in place.
+- An older installed harvester no longer replaces a newer running daemon: two plugin versions installed side by side (each launch re-points the installed link at its own build) replaced each other's daemon back and forth. `harvester setup` still restarts the daemon on the installed build.
+- A proxy reaps each daemon it started once that daemon exits, where it left every one behind as a zombie process for as long as the proxy ran.
+- A failed `ask` writes one `ask.failed` warning to the activity log with the engine, its time limit, how long it ran and the error, never the engine's output.
+
 ## [0.2.2] — 2026-11-01
 
 ### Fixed

@@ -119,10 +119,14 @@ func checkSocketPath(socket string) error {
 }
 
 func Serve(ctx context.Context, runtime config.Runtime) error {
-	return serve(ctx, runtime, drainTimeout, nil)
+	return serve(ctx, runtime, drainTimeout, handoffTimeout, nil)
 }
 
-func serve(ctx context.Context, runtime config.Runtime, drainWindow time.Duration, admittedHandler http.Handler) (returnErr error) {
+// serve runs the daemon until ctx ends or a /stop asks it to. A stop in mode shutdown (harvester stop)
+// drains admitted calls for drainWindow while keeping the socket and the lock. Any other stop is a
+// replacement's handoff: the socket and the lock pass to the successor at once, and the admitted calls
+// finish here within handoffWindow, so a replacement cuts no call that ends within its own limits.
+func serve(ctx context.Context, runtime config.Runtime, drainWindow, handoffWindow time.Duration, admittedHandler http.Handler) (returnErr error) {
 	if runtime.Version == "" {
 		runtime.Version = "dev"
 	}
@@ -167,7 +171,8 @@ func serve(ctx context.Context, runtime config.Runtime, drainWindow time.Duratio
 			}
 		}
 	}
-	defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
+	releaseLock := sync.OnceValue(lock.Close)
+	defer func() { returnErr = errors.Join(returnErr, releaseLock()) }()
 	socket := paths.DaemonSocket(runtime.Paths.Home)
 	if err := checkPrivate(socket, os.ModeSocket); err == nil {
 		if err := os.Remove(socket); err != nil {
@@ -197,14 +202,17 @@ func serve(ctx context.Context, runtime config.Runtime, drainWindow time.Duratio
 	if err != nil {
 		return err
 	}
-	defer func() {
+	// removeSocket leaves a successor's socket at the same path in place.
+	removeSocket := sync.OnceValue(func() error {
 		current, err := os.Lstat(socket)
 		if err == nil && os.SameFile(socketInfo, current) {
-			returnErr = errors.Join(returnErr, os.Remove(socket))
+			return os.Remove(socket)
 		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			returnErr = errors.Join(returnErr, err)
+			return err
 		}
-	}()
+		return nil
+	})
+	defer func() { returnErr = errors.Join(returnErr, removeSocket()) }()
 	runtimeService := runtimeForService(runtime)
 	service, err := harvestmcp.NewConfiguredHarvester(runtime.Version, runtimeService)
 	if err != nil {
@@ -223,6 +231,7 @@ func serve(ctx context.Context, runtime config.Runtime, drainWindow time.Duratio
 	}
 	defer func() { returnErr = errors.Join(returnErr, closeResources()) }()
 	gate := &admission{}
+	handoff := false // set with the first accepted /stop, under the gate's lock
 	stop := make(chan struct{})
 	var stopOnce sync.Once
 	requestDrain := func() { gate.drain(); stopOnce.Do(func() { close(stop) }) }
@@ -244,7 +253,7 @@ func serve(ctx context.Context, runtime config.Runtime, drainWindow time.Duratio
 		gate.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(snapshot); err != nil {
-			obs.Logger(r.Context()).Warn("write daemon health", "error", err)
+			obs.Logger(r.Context()).Warn("write daemon health", obs.FieldErr, err.Error())
 		}
 	})
 	mux.HandleFunc("/stop", func(w http.ResponseWriter, r *http.Request) {
@@ -263,6 +272,9 @@ func serve(ctx context.Context, runtime config.Runtime, drainWindow time.Duratio
 			http.Error(w, "daemon instance changed before drain", http.StatusConflict)
 			return
 		}
+		if !gate.draining {
+			handoff = r.URL.Query().Get("mode") != stopShutdown
+		}
 		gate.draining = true
 		gate.Unlock()
 		stopOnce.Do(func() { close(stop) })
@@ -279,11 +291,13 @@ func serve(ctx context.Context, runtime config.Runtime, drainWindow time.Duratio
 	local := &http.Server{Handler: mux, BaseContext: baseContext, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 2 * time.Minute}
 	servers := []*http.Server{local}
 	listeners := []net.Listener{listener}
+	var gateway *harvestmcp.RemoteServer
 	if status.Gateway {
 		remote, server, err := newGateway(runtime, runtimeService)
 		if err != nil {
 			return err
 		}
+		gateway = remote
 		resources = append(resources, remote.Close)
 		external, err := net.Listen("tcp", server.Addr)
 		if err != nil {
@@ -299,24 +313,56 @@ func serve(ctx context.Context, runtime config.Runtime, drainWindow time.Duratio
 		go func(server *http.Server, listener net.Listener) { done <- server.Serve(listener) }(server, listeners[index])
 	}
 	var serveErr error
+	handingOff := false
 	select {
 	case <-ctx.Done():
 	case <-stop:
+		gate.Lock()
+		handingOff = handoff
+		gate.Unlock()
 	case serveErr = <-done:
 	}
 	if errors.Is(serveErr, http.ErrServerClosed) {
 		serveErr = nil
 	}
 	requestDrain()
+	window := drainWindow
+	if handingOff {
+		window = handoffWindow
+		// Stop accepting, then give the endpoint up: the successor takes the lock and binds the socket
+		// while the admitted calls finish on their open connections, each closed once it answers.
+		for _, server := range servers {
+			server.SetKeepAlivesEnabled(false)
+		}
+		for _, listener := range listeners {
+			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				serveErr = errors.Join(serveErr, fmt.Errorf("close daemon listener for handoff: %w", err))
+			}
+		}
+		for range servers {
+			if err := <-done; err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, http.ErrServerClosed) {
+				serveErr = errors.Join(serveErr, err)
+			}
+		}
+		// The successor loads the gateway's credential state when it takes the lock: no write of this
+		// daemon's may land after that, or one would erase the other's clients and refresh tokens.
+		gateway.HandOff()
+		serveErr = errors.Join(serveErr, removeSocket(), releaseLock())
+		obs.Logger(ctx).Info("harvester daemon handed off to its successor; finishing admitted calls", "window", window.String())
+	}
 	markUnsafe := func(cleanupErr error) {
-		unsafe := fmt.Errorf("unsafe cleanup: owned work remains after cancellation; retaining daemon ownership: %w", cleanupErr)
+		ownership := "retaining daemon ownership"
+		if handingOff {
+			ownership = "the successor already owns the daemon"
+		}
+		unsafe := fmt.Errorf("unsafe cleanup: owned work remains after cancellation; %s: %w", ownership, cleanupErr)
 		gate.Lock()
 		status.CleanupError = unsafe.Error()
 		gate.Unlock()
-		obs.Logger(ctx).Error("harvester daemon unsafe cleanup", "error", unsafe, "log", paths.DaemonLog(runtime.Paths.Home))
+		obs.Logger(ctx).Error("harvester daemon unsafe cleanup", obs.FieldErr, unsafe.Error(), "path", paths.DaemonLog(runtime.Paths.Home))
 		serveErr = errors.Join(serveErr, unsafe)
 	}
-	grace, cancelGrace := context.WithTimeout(context.Background(), drainWindow)
+	grace, cancelGrace := context.WithTimeout(context.Background(), window)
 	drainErr := gate.wait(grace)
 	cancelGrace()
 	cleanup, cancelCleanup := context.WithTimeout(context.Background(), cleanupTimeout)

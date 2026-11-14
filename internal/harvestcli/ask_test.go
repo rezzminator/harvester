@@ -34,7 +34,7 @@ func TestHarvestAskRunsBothConfiguredAdapters(t *testing.T) {
 			model:    "claude-fixture-model",
 			effort:   "low",
 			homeEnv:  "CLAUDE_CONFIG_DIR",
-			wantArgs: "-p|--model|claude-fixture-model|--effort|low|--output-format|json|",
+			wantArgs: "-p|--model|claude-fixture-model|--effort|low|--strict-mcp-config|--disable-slash-commands|--tools|Read,Grep|--output-format|json|--no-session-persistence|",
 			configure: func(machine *config.Config, binary, accountHome string) {
 				machine.Claude = config.Claude{Binary: binary}
 
@@ -47,7 +47,7 @@ func TestHarvestAskRunsBothConfiguredAdapters(t *testing.T) {
 			effort:   "low",
 			flags:    []string{"--model", " Haiku"},
 			homeEnv:  "CLAUDE_CONFIG_DIR",
-			wantArgs: "-p|--model|haiku|--effort|low|--output-format|json|",
+			wantArgs: "-p|--model|haiku|--effort|low|--strict-mcp-config|--disable-slash-commands|--tools|Read,Grep|--output-format|json|--no-session-persistence|",
 			configure: func(machine *config.Config, binary, accountHome string) {
 				machine.Claude = config.Claude{Binary: binary}
 
@@ -59,7 +59,7 @@ func TestHarvestAskRunsBothConfiguredAdapters(t *testing.T) {
 			model:    "gpt-fixture-model",
 			effort:   "high",
 			homeEnv:  "CODEX_HOME",
-			wantArgs: "exec|--model|gpt-fixture-model|-c|model_reasoning_effort=\"high\"|--json|--ephemeral|--skip-git-repo-check|--color|never|",
+			wantArgs: "exec|--model|gpt-fixture-model|-c|model_reasoning_effort=\"high\"|--disable|plugins|--json|--ephemeral|--skip-git-repo-check|--color|never|",
 			configure: func(machine *config.Config, binary, accountHome string) {
 				machine.Codex = config.Codex{Binary: binary}
 

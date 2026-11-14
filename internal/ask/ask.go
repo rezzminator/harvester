@@ -12,7 +12,20 @@ import (
 	"github.com/rezzminator/harvester/internal/engine"
 )
 
-const engineTimeout = 60 * time.Second
+// An ask run boots the engine, then reads each content file in turns, so its
+// deadline grows with the files: engineTimeout, plus engineTimeoutPerFile per
+// file, up to maxEngineTimeout. A flat 60 s cut a third of runs over one or
+// two files on a loaded host, and nearly all over five.
+const (
+	engineTimeout        = 120 * time.Second
+	engineTimeoutPerFile = 30 * time.Second
+	maxEngineTimeout     = 10 * time.Minute
+)
+
+// engineBudget is the deadline of one ask run over files content files.
+func engineBudget(files int) time.Duration {
+	return min(engineTimeout+time.Duration(files)*engineTimeoutPerFile, maxEngineTimeout)
+}
 
 type AskInput struct {
 	ContentFiles []string
@@ -77,6 +90,9 @@ func ResolveInput(input AskInput, machine config.Config) (AskInput, error) {
 	}
 	if len(resolved.SourceLabels) == 0 {
 		resolved.SourceLabels = append([]string(nil), resolved.ContentFiles...)
+	}
+	if resolved.Timeout == 0 {
+		resolved.Timeout = engineBudget(len(resolved.ContentFiles))
 	}
 	if resolved.Model != "" {
 		var err error

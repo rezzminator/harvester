@@ -103,6 +103,10 @@ var declaredKeys = map[string]bool{
 	"wait_ms": true, // harvestpy.request: how long the conversion queued for a worker
 	"queue":   true, // harvestpy.request: the queue length the conversion found
 	"workers": true, // harvestpy.request: the converter pool's live workers
+
+	// ask.failed: the engine an ask ran on (claude or codex) and the time limit it ran under.
+	"engine":     true,
+	"timeout_ms": true,
 }
 
 // Declared reports whether key is on the activity log's allow-list.
