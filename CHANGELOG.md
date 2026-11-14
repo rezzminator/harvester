@@ -4,6 +4,8 @@ Every release of harvester. Versions follow [semantic versioning](https://semver
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-11-14
+
 ### Fixed
 
 - An `ask` no longer times out on a loaded machine: its deadline is 2 minutes plus 30 seconds per item read, up to 10 minutes, where a flat 60 seconds cut a third of asks over one or two items, and nearly all over five; a timeout names the deadline it ran out.
