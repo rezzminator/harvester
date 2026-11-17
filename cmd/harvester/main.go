@@ -20,6 +20,7 @@ import (
 	claudeengine "github.com/rezzminator/harvester/internal/engine/claude"
 	codexengine "github.com/rezzminator/harvester/internal/engine/codex"
 	"github.com/rezzminator/harvester/internal/harvestcli"
+	"github.com/rezzminator/harvester/internal/installping"
 	"github.com/rezzminator/harvester/internal/obs"
 	"github.com/rezzminator/harvester/internal/paths"
 	"github.com/rezzminator/harvester/internal/setup"
@@ -75,6 +76,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 				fmt.Fprintln(stderr, "usage: harvester mcp")
 				return 2
 			}
+			installping.Start(ctx, installping.Settings{Version: version, Stderr: stderr})
 			err := serveStdio(ctx, runtime, stdin, stdout, stderr)
 			if errors.Is(err, context.Canceled) {
 				return 0

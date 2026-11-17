@@ -18,6 +18,9 @@ func TestRunSeparatesOperatorState(t *testing.T) {
 			t.Errorf("%s=%q", name, got)
 		}
 	}
+	if got := os.Getenv("HARVESTER_INSTALL_PING_OFFLINE"); got != "1" {
+		t.Errorf("HARVESTER_INSTALL_PING_OFFLINE=%q, want 1 so no process the jail starts sends the install count", got)
+	}
 	for _, name := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "BASH_ENV", "HARVESTER_CONFIG", "HARVESTER_PYTHON_ROOT", "PLUGIN_LOG_DIR"} {
 		if got := os.Getenv(name); got != "" {
 			t.Errorf("%s leaked %q", name, got)

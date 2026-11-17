@@ -17,7 +17,7 @@ func TestStateRootsRespectXDGAndKeepInstallHomeSeparate(t *testing.T) {
 	if got := PythonRoot(home); got != filepath.Join(state, "harvester", "python") {
 		t.Fatalf("python=%q", got)
 	}
-	for _, entry := range []struct{ actual, want string }{{DaemonSocket(home), filepath.Join(state, "harvester", "daemon.sock")}, {DaemonLock(home), filepath.Join(state, "harvester", "daemon.lock")}, {DaemonLog(home), filepath.Join(state, "harvester", "logs", "daemon.log")}} {
+	for _, entry := range []struct{ actual, want string }{{DaemonSocket(home), filepath.Join(state, "harvester", "daemon.sock")}, {DaemonLock(home), filepath.Join(state, "harvester", "daemon.lock")}, {DaemonLog(home), filepath.Join(state, "harvester", "logs", "daemon.log")}, {InstallID(home), filepath.Join(state, "harvester", "install-id")}, {InstallPingDay(home), filepath.Join(state, "harvester", "install-ping-day")}} {
 		if entry.actual != entry.want {
 			t.Fatalf("daemon path=%q want=%q", entry.actual, entry.want)
 		}
