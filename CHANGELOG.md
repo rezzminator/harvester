@@ -4,6 +4,13 @@ Every release of harvester. Versions follow [semantic versioning](https://semver
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-20
+
+### Added
+
+- **An anonymous install count.** `harvester mcp` sends one ping per UTC day, in the background and never on stdout, to the install counter at `install-ping.rezzminator.workers.dev`: a random install id, the version, the OS, the CPU architecture and the event (`install` until a ping is stored, `daily` after that). It is fire-and-forget with a 5 second timeout; two first starts racing share one id; the first run prints one line on stderr saying the count is on. `HARVESTER_INSTALL_PING_OFFLINE` or `DO_NOT_TRACK` opts out, and CI and test processes never send. The README's Install count section lists exactly what is sent.
+- A `glama.json` maintainer manifest, so the Glama listing of harvester is claimed under this repository.
+
 ## [0.2.3] — 2026-11-14
 
 ### Fixed

@@ -17,6 +17,7 @@ Cached handles and external gateway credentials outlive one process: migration c
 - setup: conversion provisioning and external gateway login service · `internal/setup/`
 - doctor: configuration, cache, search and conversion health rows · `internal/doctor/`
 - testjail: isolated process homes and environment for test packages · `internal/testjail/`
+- install count: `harvester mcp`'s anonymous once-per-UTC-day ping, its `{state}/install-id` and `{state}/install-ping-day` files and opt-outs `$HARVESTER_INSTALL_PING_OFFLINE`, `$DO_NOT_TRACK` · `internal/installping/`
 - plugin: the installable manifest, launcher and release checksums · `plugins/harvester/`
 - launcher: installs a checksum-verified versioned binary under `${HARVESTER_HOME:-$HOME/.local/share/harvester}` and maintains `{HARVESTER_HOME}/bin/harvester` · `plugins/harvester/libexec/harvester`
 - release: version and checksum gates, reproducible assets · `scripts/release-check.sh`, `scripts/build-release.sh`

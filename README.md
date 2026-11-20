@@ -190,6 +190,25 @@ rows are held; nothing else is printed. `HARVESTER_LOG_LEVEL` and `HARVESTER_LOG
 still choose which records are written. A log left by an earlier version
 (`harvester.jsonl` and its `.lock`) is not read or removed.
 
+## Install count
+
+`harvester mcp` sends one anonymous ping per UTC day, in the background, to
+`https://install-ping.rezzminator.workers.dev/v1/ping`, so the project can
+count real installs. The ping carries exactly: a random id (a UUIDv4 generated
+once and kept in `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/install-id`,
+never derived from the machine or you), the product `harvester`, the version,
+the OS and CPU architecture, an empty plugin list, and the event: `install`
+until a ping is stored, `daily` after that. The day of the last
+stored ping is kept beside the id in `install-ping-day`. The counter stores one
+row per day and id; it never stores your IP address, user name or request
+headers. The first run prints one line on stderr saying the count is on.
+
+Set `HARVESTER_INSTALL_PING_OFFLINE=1` or `DO_NOT_TRACK=1` (any value but `0`
+or `false`) to turn it off: nothing is sent and no file is created. Nothing is
+sent under CI (`CI` set to anything but `0` or `false`, or
+`GITHUB_ACTIONS=true`) or inside Harvester's test jail. A failed ping is
+logged as a warning and not retried until the next `harvester mcp` start.
+
 ## Development
 
 Run the build, vet, and test checks inside the project fence as described in

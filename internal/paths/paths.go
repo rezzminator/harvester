@@ -56,6 +56,10 @@ func DaemonSocket(home string) string { return filepath.Join(StateRoot(home), "d
 func DaemonLock(home string) string   { return filepath.Join(StateRoot(home), "daemon.lock") }
 func DaemonLog(home string) string    { return filepath.Join(LogDir(home), "daemon.log") }
 
+// InstallID is the install count's random id file; InstallPingDay holds the UTC day its last ping was stored.
+func InstallID(home string) string      { return filepath.Join(StateRoot(home), "install-id") }
+func InstallPingDay(home string) string { return filepath.Join(StateRoot(home), "install-ping-day") }
+
 // LogDir is where harvester logs: $PLUGIN_LOG_DIR/harvester when PLUGIN_LOG_DIR is set, else the state root's logs.
 // Nothing else sets the location.
 func LogDir(home string) string {
