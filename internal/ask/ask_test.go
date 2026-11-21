@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"github.com/rezzminator/harvester/internal/config"
 	"github.com/rezzminator/harvester/internal/engine"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -46,22 +48,29 @@ func TestResolveInputAndEvidencePrompt(t *testing.T) {
 	if input.Model != "haiku" || input.Effort != "low" {
 		t.Fatalf("input=%+v", input)
 	}
-	// An ask's deadline grows with its content files, up to a ceiling; one the caller set stands.
+	// An ask's deadline grows with its content files and their size, up to a ceiling; one the caller set stands.
+	prepared := t.TempDir()
 	for _, tc := range []struct {
 		files   int
+		bytes   int // each file's size
 		timeout time.Duration
 		want    time.Duration
 	}{
-		{1, 0, 150 * time.Second}, {15, 0, 570 * time.Second}, {16, 0, 10 * time.Minute}, {17, 0, 10 * time.Minute},
-		{1, 5 * time.Second, 5 * time.Second},
+		{1, 0, 0, 150 * time.Second}, {15, 0, 0, 570 * time.Second}, {16, 0, 0, 10 * time.Minute}, {17, 0, 0, 10 * time.Minute},
+		{1, 1023, 0, 150 * time.Second}, {1, 1024, 0, 151 * time.Second}, {1, 130701, 0, 277 * time.Second},
+		{2, 130701, 0, 434 * time.Second}, {4, 130701, 0, 10 * time.Minute},
+		{1, 130701, 5 * time.Second, 5 * time.Second},
 	} {
 		files := make([]string, tc.files)
 		for index := range files {
-			files[index] = fmt.Sprintf("prepared-%d.md", index+1)
+			files[index] = filepath.Join(prepared, fmt.Sprintf("prepared-%d-%d.md", tc.bytes, index+1))
+			if err := os.WriteFile(files[index], make([]byte, tc.bytes), 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}
 		resolved, err := ResolveInput(AskInput{ContentFiles: files, Prompt: "Find evidence", Engine: engine.Claude, Timeout: tc.timeout}, config.Config{})
 		if err != nil || resolved.Timeout != tc.want {
-			t.Fatalf("ResolveInput(%d files, timeout %s).Timeout = %s, %v; want %s", tc.files, tc.timeout, resolved.Timeout, err, tc.want)
+			t.Fatalf("ResolveInput(%d files of %d bytes, timeout %s).Timeout = %s, %v; want %s", tc.files, tc.bytes, tc.timeout, resolved.Timeout, err, tc.want)
 		}
 	}
 	for _, input := range []AskInput{{}, {ContentFiles: []string{"file"}, Prompt: " "}, {ContentFiles: []string{" "}, Prompt: "Q"}, {ContentFiles: []string{"file"}, Prompt: "Q", SourceLabels: []string{"a", "b"}}} {

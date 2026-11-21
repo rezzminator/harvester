@@ -292,9 +292,16 @@ func (h *Harvester) fetchKnownID(ctx context.Context, source string, kind Identi
 	}
 }
 
+// doiMirrorFailureKind is the kind of an identifier's terminal failure, read
+// off the last fallback that failed: a fallback that could not be asked keeps
+// its own kind (an outage a retry may cure), and one that answered and holds
+// nothing leaves the work with no open copy — never a missing document.
 func doiMirrorFailureKind(result *Result) string {
 	if result == nil {
 		return ""
+	}
+	if result.ErrorKind == errorKindMissing {
+		return errorKindNoOpenCopy
 	}
 	return result.ErrorKind
 }

@@ -89,7 +89,7 @@ func TestLegacyOAProviderEdgeShapes(t *testing.T) {
 
 	t.Run("Semantic Scholar normalizes PMC identifiers", func(t *testing.T) {
 		client := legacyOAClient(t, func(*http.Request) string {
-			return `{"openAccessPdf":null,"externalIds":{"PubMedCentral":"10450651"}}`
+			return `{"openAccessPdf":null,"externalIds":{"CorpusId":259907158,"PubMedCentral":"10450651"}}`
 		})
 		got, err := (&Resolver{}).semanticScholar(context.Background(), client, "10.1234/example")
 		if err != nil || len(got) != 1 || got[0].URL != "https://europepmc.org/articles/PMC10450651?pdf=render" {

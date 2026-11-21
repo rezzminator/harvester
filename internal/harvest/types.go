@@ -355,6 +355,9 @@ type Result struct {
 	// (a conversion outage, an empty conversion): the published failure quotes
 	// it, redacted, since the published text never quotes Error itself.
 	converterError string
+	// archiveNote is the sentence a refused Reddit address's published failure
+	// ends on when the archive rung could not stand in (reddit_archive.go).
+	archiveNote string
 }
 
 // Harvester owns transport, policy and cache state.

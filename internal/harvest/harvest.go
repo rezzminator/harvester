@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/rezzminator/harvester/internal/obs"
 )
 
 // FetchWithOptions routes local files, URLs, and scholarly identifiers.
@@ -653,6 +655,26 @@ func (h *Harvester) fetchURLWithPolicy(
 			lastChallenge = result.Challenge
 		}
 	}
+	// A Reddit address no live rung read is answered from the public archive of
+	// Reddit's posts and comments (reddit_archive.go), ahead of the Wayback
+	// Machine, which Reddit keeps out.
+	redditArchiveNote, redditArchivePublic := "", ""
+	if ask, ok := redditArchiveAskFor(source); ok && !originGone {
+		rungs = append(rungs, rungRedditArchive)
+		markdown, reason, archiveErr := h.redditArchiveRead(withoutRetryAfterNote(ctx), ask)
+		switch {
+		case archiveErr != nil:
+			obs.Logger(ctx).Warn("harvest: the Reddit archive rung failed",
+				"source", logSource(source), obs.FieldErr, archiveErr.Error())
+			redditArchiveNote = redditArchiveUnread + ": " + archiveErr.Error() + "."
+			redditArchivePublic = redditArchiveUnread + redditArchiveRetry
+		case markdown == "":
+			redditArchiveNote, redditArchivePublic = redditArchiveNoRecord, redditArchiveNoRecord
+		default:
+			return h.storeResult(source, kindHTML, rungRedditArchive, withPartial(markdown, reason),
+				int64(len(markdown)), http.StatusOK, rungs, options)
+		}
+	}
 	// Any public source may have a legal Wayback snapshot, not only a DOI
 	// landing page. Avoid recursing when the snapshot itself fails.
 	if !strings.Contains(strings.ToLower(source), "web.archive.org") && !isPrivateURL(source) && !originGone {
@@ -815,6 +837,7 @@ func (h *Harvester) fetchURLWithPolicy(
 	if providerFailure != nil {
 		message += " " + providerFailure.Error
 	}
+	message += redditArchiveNote
 	message, lastErrorKind, converterError := converterNote(
 		message,
 		lastErrorKind,
@@ -841,6 +864,7 @@ func (h *Harvester) fetchURLWithPolicy(
 		ContentChars:   lastContentChars,
 		Rungs:          rungs,
 		converterError: converterError,
+		archiveNote:    redditArchivePublic,
 	}
 }
 

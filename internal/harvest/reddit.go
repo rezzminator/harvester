@@ -211,49 +211,26 @@ func extractRedditThread(doc *html.Node, _ *url.URL) (siteExtraction, bool) {
 		countLine += " · gaps: " + strings.Join(gaps, "; ")
 	}
 
-	var out strings.Builder
 	title := strings.TrimSpace(nodeAttr(post, "post-title"))
 	if title == "" {
 		if heading := firstWithAttr(post, "slot", "title", nil); heading != nil {
 			title = nodeText(heading)
 		}
 	}
-	out.WriteString("# " + title + "\n\n")
-	var meta []string
-	if subreddit := nodeAttr(post, "subreddit-prefixed-name"); subreddit != "" {
-		meta = append(meta, "**Subreddit:** "+subreddit)
+	thread := redditThreadDocument{
+		title:      title,
+		subreddit:  nodeAttr(post, "subreddit-prefixed-name"),
+		author:     nodeAttr(post, "author"),
+		score:      nodeAttr(post, "score"),
+		posted:     redditDate(nodeAttr(post, "created-timestamp")),
+		permalink:  renderer.resolve(nodeAttr(post, "permalink")),
+		link:       renderer.resolve(nodeAttr(post, "content-href")),
+		countLine:  countLine,
+		comments:   comments,
+		noComments: "*No comments are in this page.*",
 	}
-	if author := nodeAttr(post, "author"); author != "" {
-		meta = append(meta, "**Author:** u/"+author)
-	}
-	if score := nodeAttr(post, "score"); score != "" {
-		meta = append(meta, "**Score:** "+score)
-	}
-	if created := redditDate(nodeAttr(post, "created-timestamp")); created != "" {
-		meta = append(meta, "**Posted:** "+created)
-	}
-	if len(meta) > 0 {
-		out.WriteString(strings.Join(meta, " · ") + "  \n")
-	}
-	permalink := renderer.resolve(nodeAttr(post, "permalink"))
-	if permalink != "" {
-		out.WriteString("**Thread:** " + permalink + "  \n")
-	}
-	if link := renderer.resolve(nodeAttr(post, "content-href")); link != "" && link != permalink {
-		out.WriteString("**Link:** " + link + "  \n")
-	}
-	out.WriteString(countLine + "\n\n")
 	if body := firstWithAttr(post, "slot", "text-body", nil); body != nil {
-		if blocks := renderer.blocks(body); len(blocks) > 0 {
-			out.WriteString(strings.Join(blocks, "\n\n") + "\n\n")
-		}
-	}
-	out.WriteString("---\n\n## Comments\n\n")
-	if len(comments) == 0 {
-		out.WriteString("*No comments are in this page.*\n")
-	}
-	for _, comment := range comments {
-		out.WriteString(comment.markdown())
+		thread.body = strings.Join(renderer.blocks(body), "\n\n")
 	}
 
 	var counted *commentCount
@@ -270,11 +247,67 @@ func extractRedditThread(doc *html.Node, _ *url.URL) (siteExtraction, bool) {
 		)
 	}
 	return siteExtraction{
-		markdown:          out.String(),
+		markdown:          thread.markdown(),
 		partial:           partial,
 		comments:          counted,
 		renderMayComplete: replyLoaders+commentLoaders > 0,
 	}, true
+}
+
+// redditThreadDocument is one thread as its artifact shows it, whichever
+// surface it was read from: the live page (extractRedditThread) or the
+// archive's record (reddit_archive.go).
+type redditThreadDocument struct {
+	title      string
+	subreddit  string // with its "r/" prefix
+	author     string
+	score      string
+	posted     string
+	permalink  string
+	link       string // what a link post points to
+	countLine  string
+	body       string // the post's own text, as markdown
+	comments   []redditComment
+	noComments string // the line standing in for an empty comment list
+}
+
+func (thread redditThreadDocument) markdown() string {
+	var out strings.Builder
+	out.WriteString("# " + thread.title + "\n\n")
+	var meta []string
+	if thread.subreddit != "" {
+		meta = append(meta, "**Subreddit:** "+thread.subreddit)
+	}
+	if thread.author != "" {
+		meta = append(meta, "**Author:** u/"+thread.author)
+	}
+	if thread.score != "" {
+		meta = append(meta, "**Score:** "+thread.score)
+	}
+	if thread.posted != "" {
+		meta = append(meta, "**Posted:** "+thread.posted)
+	}
+	if len(meta) > 0 {
+		out.WriteString(strings.Join(meta, " · ") + "  \n")
+	}
+	if thread.permalink != "" {
+		out.WriteString("**Thread:** " + thread.permalink + "  \n")
+	}
+	if thread.link != "" && thread.link != thread.permalink {
+		out.WriteString("**Link:** " + thread.link + "  \n")
+	}
+	out.WriteString(thread.countLine + "\n\n")
+	if thread.body != "" {
+		out.WriteString(thread.body + "\n\n")
+	}
+	out.WriteString("---\n\n## Comments\n\n")
+	if len(thread.comments) == 0 {
+		out.WriteString(thread.noComments + "\n")
+	}
+	for _, comment := range thread.comments {
+		out.WriteString(comment.markdown())
+	}
+	return out.String()
 }
 
 // redditThreadPost returns the thread's own <shreddit-post>: the first one

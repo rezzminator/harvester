@@ -60,7 +60,7 @@ func (runner processEngine) Run(parent context.Context, input AskInput) (_ AskRe
 	name := engine.MustLookup(runner.engine).LongName
 	timeout := input.Timeout
 	if timeout == 0 {
-		timeout = engineBudget(len(input.ContentFiles))
+		timeout = engineBudget(input.ContentFiles)
 	}
 	asked := clock.Real.Now()
 	// logged is the failure as the log keeps it: never the engine's stdout, which can quote what it read.

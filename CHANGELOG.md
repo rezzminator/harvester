@@ -4,6 +4,16 @@ Every release of harvester. Versions follow [semantic versioning](https://semver
 
 ## [Unreleased]
 
+### Added
+
+- **A Reddit page the server cannot reach is read from the public archive.** Reddit refuses many server addresses outright: the page, `old.reddit.com`, the `.json` and `.rss` twins and the readers all answer HTTP 403. A Reddit address no live rung could read is now answered from the Arctic Shift archive of Reddit's posts and comments: a thread with its comment tree (or one comment's branch), a subreddit's listing (`top` ranked here by archived score), a search inside one subreddit, and a subreddit's about page. The result reads `via: reddit-archive` and is marked partial, naming the archive, the day of its record and what the answer leaves out; a call the archive sheds under load (HTTP 422, 429 or a server error) is asked again after 2 and then 5 seconds; when the archive cannot stand in, the failure says whether it could not be read or holds no record.
+
+### Fixed
+
+- A DOI with no open copy reads as `no_open_copy` again, with the advice to look for a preprint. When Google Scholar, the last fallback, answered a page without the DOI, the failure was labelled a failed connection and the caller was told to retry later.
+- The Semantic Scholar source reads a paper record again: its `externalIds` object holds a number (`CorpusId`) the decoder refused, so the source failed on every DOI it knew.
+- An `ask` over a long document gets the time it needs: its deadline adds one second per KiB of content to the 2 minutes plus 30 seconds per item, up to 10 minutes. A quoting question over a 130 KB paper takes about 170 seconds and was cut at 150.
+
 ## [0.3.0] — 2026-11-20
 
 ### Added
