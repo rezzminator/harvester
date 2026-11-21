@@ -21,5 +21,12 @@ func Run(m *testing.M) int {
 			return 1
 		}
 	}
+	if path, err := os.Executable(); err != nil {
+		fmt.Fprintln(os.Stderr, "testjail:", err)
+		return 1
+	} else if err := TrustExecutable(path); err != nil {
+		fmt.Fprintln(os.Stderr, "testjail:", err)
+		return 1
+	}
 	return m.Run()
 }

@@ -358,6 +358,9 @@ type Result struct {
 	// archiveNote is the sentence a refused Reddit address's published failure
 	// ends on when the archive rung could not stand in (reddit_archive.go).
 	archiveNote string
+	// published marks a failure PublicFailure already worded: Error is its public
+	// text, which a later PublicFailureMessage returns as it stands.
+	published bool
 }
 
 // Harvester owns transport, policy and cache state.

@@ -74,21 +74,6 @@ const (
 	redditArchiveRetry    = "; a retry later may reach it."
 )
 
-// redditArchivePublished is the archive sentence a failure's published text
-// ends on: the ladder's own (archiveNote), or the one an already published
-// text carries, which a second public pass keeps.
-func redditArchivePublished(result Result) string {
-	if result.archiveNote != "" {
-		return result.archiveNote
-	}
-	for _, note := range []string{redditArchiveNoRecord, redditArchiveUnread + redditArchiveRetry} {
-		if strings.Contains(result.Error, note) {
-			return note
-		}
-	}
-	return ""
-}
-
 // redditArchiveWaits are the pauses before each repeat of a call the archive
 // shed: under load it answers HTTP 422 ("Timeout. Maybe slow down a bit"), a
 // 429 or a server error to a call it serves seconds later.

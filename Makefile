@@ -28,9 +28,8 @@ release-check: check release
 check:
 	unformatted=$$(sh -c '"$$(go env GOROOT)/bin/gofmt" -l .'); \
 	test -z "$$unformatted" || { printf '%s\n' "$$unformatted"; exit 1; }
-	# umask 022 as on the GitHub runner: the daemon refuses group-writable test binaries.
-	umask 022 && go build ./... && go vet ./... && go test ./...
-	umask 022 && CGO_ENABLED=1 go test -race ./internal/harvest ./internal/harvestmcp
+	go build ./... && go vet ./... && go test ./...
+	CGO_ENABLED=1 go test -race ./internal/harvest ./internal/harvestmcp
 	$(NODE) node --test plugins/harvester/opencode.test.mjs
 	scripts/release-check.sh
 	$(MAKE) --no-print-directory leak

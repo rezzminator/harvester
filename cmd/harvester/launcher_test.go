@@ -76,11 +76,27 @@ func TestLauncherVerifiesDownloadsAndPublishesStableBinary(t *testing.T) {
 			if err := os.Remove(fakeCurl); err != nil {
 				t.Fatal(err)
 			}
+			// A stable link already naming this version is left alone: an mv that
+			// reports success and keeps its source strands no staged link.
+			if err := testjail.WriteExecutable(filepath.Join(bin, "mv"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
 			command = exec.Command("sh", entry, "cached")
-			command.Env = append(os.Environ(), "HARVESTER_HOME="+install)
+			command.Env = append(os.Environ(), "HARVESTER_HOME="+install, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			output, err = command.CombinedOutput()
 			if err != nil || string(output) != "fixture cached\n" {
 				t.Fatalf("cached: err=%v output=%s", err, output)
+			}
+			entries, err := os.ReadDir(filepath.Join(install, "bin"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var names []string
+			for _, entry := range entries {
+				names = append(names, entry.Name())
+			}
+			if got := strings.Join(names, " "); got != "0.1.0-dev.1 harvester" {
+				t.Fatalf("%s holds %q after a cached launch, want the version directory and the stable link alone", filepath.Join(install, "bin"), got)
 			}
 		})
 	}

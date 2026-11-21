@@ -12,6 +12,8 @@ Every release of harvester. Versions follow [semantic versioning](https://semver
 
 - A DOI with no open copy reads as `no_open_copy` again, with the advice to look for a preprint. When Google Scholar, the last fallback, answered a page without the DOI, the failure was labelled a failed connection and the caller was told to retry later.
 - The Semantic Scholar source reads a paper record again: its `externalIds` object holds a number (`CorpusId`) the decoder refused, so the source failed on every DOI it knew.
+- A failed read names the rungs it tried again (`Rungs tried: direct, chrome-impersonation, …`): the failure was worded twice, and the second wording, the one the caller reads, no longer had them.
+- The launcher leaves a stable link that already names its version alone, and clears a staged link a dead launcher left under its own process id: an `mv` that kept its source stranded a `.harvester-link-{pid}` file in the binary home on every start.
 - An `ask` over a long document gets the time it needs: its deadline adds one second per KiB of content to the 2 minutes plus 30 seconds per item, up to 10 minutes. A quoting question over a 130 KB paper takes about 170 seconds and was cut at 150.
 
 ## [0.3.0] — 2026-11-20
