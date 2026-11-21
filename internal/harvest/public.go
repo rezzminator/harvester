@@ -615,7 +615,7 @@ func PublicFailureMessage(result Result) string {
 			step,
 		)
 	}
-	return withRetryAfterText(publicFailureTable(result, kind)+result.archiveNote, result.RetryAfter)
+	return withRetryAfterText(publicFailureTable(result, kind)+redditArchivePublished(result), result.RetryAfter)
 }
 
 // JSONResult is one `harvester --json` object: the public result with

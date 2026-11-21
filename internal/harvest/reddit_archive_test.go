@@ -270,6 +270,10 @@ func TestRedditArchiveFailureIsNamedBesideReddits(t *testing.T) {
 			"harvester cannot tell apart, and it never signs in. Rungs tried: direct, chrome-impersonation, jina, " +
 			"defuddle, reddit-archive, wayback. Find another copy at another URL (search_web, when configured) and " +
 			"read it with read (urls), or with search_literature and read (publications) if it is a scholarly work."
+		refusedAgain = "The source refused the harvester (HTTP 403 Forbidden): a bot block or an access rule, which " +
+			"the harvester cannot tell apart, and it never signs in. Find another copy at another URL (search_web, when " +
+			"configured) and read it with read (urls), or with search_literature and read (publications) if it is a " +
+			"scholarly work."
 		unread = " The archive of Reddit that stands in for a refused page could not be read either; " +
 			"a retry later may reach it."
 	)
@@ -279,6 +283,7 @@ func TestRedditArchiveFailureIsNamedBesideReddits(t *testing.T) {
 		shed       map[string]int
 		wantNote   string
 		wantPublic string
+		wantAgain  string
 		wantPauses []time.Duration
 	}{
 		{
@@ -287,6 +292,8 @@ func TestRedditArchiveFailureIsNamedBesideReddits(t *testing.T) {
 			wantNote: " The archive of Reddit that stands in for a refused page holds no record of this address.",
 			wantPublic: refusal +
 				" The archive of Reddit that stands in for a refused page holds no record of this address.",
+			wantAgain: refusedAgain +
+				" The archive of Reddit that stands in for a refused page holds no record of this address.",
 		},
 		{
 			name:    "the archive refuses the call",
@@ -294,6 +301,7 @@ func TestRedditArchiveFailureIsNamedBesideReddits(t *testing.T) {
 			wantNote: " The archive of Reddit that stands in for a refused page could not be read either: " +
 				"the Reddit archive /api/posts/ids: HTTP 404.",
 			wantPublic: refusal + unread,
+			wantAgain:  refusedAgain + unread,
 		},
 		{
 			name:    "the archive sheds the call every time it is asked",
@@ -302,6 +310,7 @@ func TestRedditArchiveFailureIsNamedBesideReddits(t *testing.T) {
 			wantNote: " The archive of Reddit that stands in for a refused page could not be read either: " +
 				"the Reddit archive /api/posts/ids: HTTP 422.",
 			wantPublic: refusal + unread,
+			wantAgain:  refusedAgain + unread,
 			wantPauses: []time.Duration{2 * time.Second, 5 * time.Second},
 		},
 	} {
@@ -317,8 +326,14 @@ func TestRedditArchiveFailureIsNamedBesideReddits(t *testing.T) {
 			if strings.Count(result.Error, row.wantNote) != 1 {
 				t.Fatalf("error = %q, want it to say once %q", result.Error, row.wantNote)
 			}
-			if public := h.PublicResult(source, result, false).Error; public != row.wantPublic {
-				t.Fatalf("the published failure:\n got %q\nwant %q", public, row.wantPublic)
+			published := h.PublicResult(source, result, false)
+			if published.Error != row.wantPublic {
+				t.Fatalf("the published failure:\n got %q\nwant %q", published.Error, row.wantPublic)
+			}
+			// The MCP renders a published failure a second time; that pass no
+			// longer has the rungs, and keeps the archive's sentence.
+			if again := PublicFailureMessage(published); again != row.wantAgain {
+				t.Fatalf("the published failure, rendered again:\n got %q\nwant %q", again, row.wantAgain)
 			}
 			if !slices.Equal(site.clock.sleeps, row.wantPauses) {
 				t.Fatalf("paused %v between the archive calls %q, want %v", site.clock.sleeps, site.asked, row.wantPauses)
