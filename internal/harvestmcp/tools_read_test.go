@@ -297,19 +297,47 @@ func TestReadAllFailedIsAnError(t *testing.T) {
 
 // TestRenderReadItemKeepsAPublishedFailuresText: the render's second pass over
 // a published failure keeps its text — a converter's named failure is never
-// re-read as "The title is ambiguous".
+// re-read as "The title is ambiguous", and the rungs a refused page names stay.
 func TestRenderReadItemKeepsAPublishedFailuresText(t *testing.T) {
-	source := "/tmp/demo/broken-feed.xml"
-	published := harvest.PublicFailure(source, harvest.Result{
-		Source: source, Kind: "feed",
-		Error: "harvestpy conversion failed (ValueError): ValueError: the XML has no root element: " +
-			"Start tag expected, '<' not found (stderr: conversion failed for kind='feed': ValueError: " +
-			"the XML has no root element: Start tag expected, '<' not found)",
-	})
-	text, failed := RenderReadItem(1, 1, source, published, ReadView{})
-	if !failed || strings.Contains(text, "ambiguous") ||
-		!strings.Contains(text, "the XML has no root element: Start tag expected, '<' not found") {
-		t.Fatalf("RenderReadItem = %q (failed %v), want the converter's named failure", text, failed)
+	for _, test := range []struct {
+		name, source string
+		failure      harvest.Result
+		want         string
+	}{
+		{
+			name: "converter failure", source: "/tmp/demo/broken-feed.xml",
+			failure: harvest.Result{
+				Kind: "feed",
+				Error: "harvestpy conversion failed (ValueError): ValueError: the XML has no root element: " +
+					"Start tag expected, '<' not found (stderr: conversion failed for kind='feed': ValueError: " +
+					"the XML has no root element: Start tag expected, '<' not found)",
+			},
+			want: "=== [1/1] /tmp/demo/broken-feed.xml\nerror: The document was retrieved but the converter could not read it: " +
+				"the XML has no root element: Start tag expected, '<' not found. Find another copy at another URL " +
+				"(search_web, when configured) and read it with read (urls), or with search_literature and read " +
+				"(publications) if it is a scholarly work.",
+		},
+		{
+			name: "challenge with its rungs", source: "https://example.test/page",
+			failure: harvest.Result{
+				ErrorKind: "challenge", Challenge: true, HTTPStatus: 403, Error: "behind a challenge",
+				Rungs: []string{"direct", "chrome-impersonation", "jina", "defuddle", "wayback"},
+			},
+			want: "=== [1/1] https://example.test/page\nerror: The source is behind an access challenge; the harvester " +
+				"never solves a challenge. Rungs tried: direct, chrome-impersonation, jina, defuddle, wayback. " +
+				"Retrying will meet the same wall: find another copy at another URL (search_web, when configured) " +
+				"and read it with read (urls), or with search_literature and read (publications) if it is a " +
+				"scholarly work.",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			test.failure.Source = test.source
+			published := harvest.PublicFailure(test.source, test.failure)
+			text, failed := RenderReadItem(1, 1, test.source, published, ReadView{})
+			if !failed || text != test.want {
+				t.Fatalf("RenderReadItem = %q (failed %v), want %q", text, failed, test.want)
+			}
+		})
 	}
 }
 

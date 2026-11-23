@@ -440,7 +440,7 @@ func postJSON(ctx context.Context, client *http.Client, raw string, payload, dst
 		return err
 	}
 	if response.status >= 400 {
-		return fmt.Errorf("HTTP %d", response.status)
+		return httpStatusError(response.status)
 	}
 	if err := json.Unmarshal(response.body, dst); err != nil {
 		return fmt.Errorf("decode JSON: %w", err)
@@ -492,13 +492,19 @@ func getJSONBody(
 		return err
 	}
 	if response.status >= 400 {
-		return fmt.Errorf("HTTP %d", response.status)
+		return httpStatusError(response.status)
 	}
 	if err := json.Unmarshal(response.body, dst); err != nil {
 		return fmt.Errorf("decode JSON: %w", err)
 	}
 	return nil
 }
+
+// httpStatusError is the HTTP error status a JSON endpoint answered, for a
+// caller that repeats a call by its status.
+type httpStatusError int
+
+func (status httpStatusError) Error() string { return fmt.Sprintf("HTTP %d", int(status)) }
 
 func getJSONWithHeaders(
 	ctx context.Context,

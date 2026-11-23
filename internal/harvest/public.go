@@ -485,7 +485,7 @@ var publicExportPermanent = map[string]bool{
 // Receipt writers use this boundary when a failure occurs after FetchPublic.
 func PublicFailure(source string, result Result) Result {
 	kind := publicErrorKind(result)
-	out := Result{Source: PublicSourceLabel(source), Error: PublicFailureMessage(result), ErrorKind: kind}
+	out := Result{Source: PublicSourceLabel(source), Error: PublicFailureMessage(result), ErrorKind: kind, published: true}
 	out.RetryAfter = result.RetryAfter
 	if (result.HTTPStatus >= 400 && result.HTTPStatus < 600) || result.HTTPStatus == statusBotBlock {
 		out.HTTPStatus = result.HTTPStatus
@@ -585,6 +585,9 @@ func publicErrorKind(result Result) string {
 // does not include Result.Source or Result.Error: both can contain a provider
 // URL, private path, or a provider's internal wording.
 func PublicFailureMessage(result Result) string {
+	if result.published {
+		return result.Error // the rungs it names left with the private result
+	}
 	kind := publicErrorKind(result)
 	switch kind {
 	case errorKindRefused:
@@ -615,7 +618,7 @@ func PublicFailureMessage(result Result) string {
 			step,
 		)
 	}
-	return withRetryAfterText(publicFailureTable(result, kind), result.RetryAfter)
+	return withRetryAfterText(publicFailureTable(result, kind)+result.archiveNote, result.RetryAfter)
 }
 
 // JSONResult is one `harvester --json` object: the public result with

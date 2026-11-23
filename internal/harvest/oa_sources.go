@@ -178,7 +178,12 @@ func (r *Resolver) semanticScholar(ctx context.Context, client *http.Client, doi
 			URL    string `json:"url"`
 			Status string `json:"status"`
 		} `json:"openAccessPdf"`
-		External map[string]string `json:"externalIds"`
+		// Only the identifiers read below are decoded: the object also holds
+		// numbers (CorpusId), which a map of strings refuses whole.
+		External struct {
+			ArXiv string `json:"ArXiv"`
+			PMC   string `json:"PubMedCentral"`
+		} `json:"externalIds"`
 	}
 	headers := map[string]string{}
 	if key := strings.TrimSpace(r.SemanticScholarAPIKey); key != "" {
@@ -206,13 +211,13 @@ func (r *Resolver) semanticScholar(ctx context.Context, client *http.Client, doi
 			},
 		)
 	}
-	if arxiv := data.External["ArXiv"]; arxiv != "" {
+	if arxiv := data.External.ArXiv; arxiv != "" {
 		out = append(
 			out,
 			Candidate{URL: "https://arxiv.org/pdf/" + arxiv, Source: sourceArXiv, Priority: 0, Kind: kindPDF},
 		)
 	}
-	if pmc := data.External["PubMedCentral"]; pmc != "" {
+	if pmc := data.External.PMC; pmc != "" {
 		if !strings.HasPrefix(strings.ToUpper(pmc), "PMC") {
 			pmc = "PMC" + pmc
 		}

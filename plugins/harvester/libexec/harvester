@@ -9,7 +9,9 @@ root=${HARVESTER_HOME:-${HOME:?HOME is unset}/.local/share/harvester}
 case "$root" in /*) ;; *) fail 'HARVESTER_HOME must be absolute';; esac
 binary=$root/bin/$version/harvester
 link_binary() {
+  [ "$(readlink "$root/bin/harvester" 2>/dev/null)" != "$version/harvester" ] || return 0
   temporary=$root/bin/.harvester-link-$$
+  rm -f "$temporary"
   ln -s "$version/harvester" "$temporary" || fail 'cannot stage stable link'
   mv -f "$temporary" "$root/bin/harvester" || { rm -f "$temporary"; fail 'cannot publish stable link'; }
 }

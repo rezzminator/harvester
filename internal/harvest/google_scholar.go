@@ -59,6 +59,10 @@ func (r *Resolver) googleScholar(ctx context.Context, query string, limit int) (
 	return candidates, nil
 }
 
+// errScholarNoExactDOI is Google Scholar answering a page that lists no result
+// for the DOI: it was asked and holds nothing, never a failure to ask.
+var errScholarNoExactDOI = errors.New("response from Google Scholar had no exact DOI result")
+
 func (r *Resolver) googleScholarDOI(ctx context.Context, doi string, limit int) ([]Candidate, error) {
 	base := strings.TrimRight(strings.TrimSpace(r.GoogleScholarURL), "/")
 	if base == "" {
@@ -81,7 +85,7 @@ func (r *Resolver) googleScholarDOI(ctx context.Context, doi string, limit int) 
 	rows := parseGoogleScholarRows(response.body, limit, doi)
 	candidates := scholarRowsWithVersions(providerCtx, h, response.finalURL, rows, limit, doi)
 	if len(candidates) == 0 {
-		return nil, errors.New("response from Google Scholar had no exact DOI result")
+		return nil, errScholarNoExactDOI
 	}
 	return candidates, nil
 }
@@ -94,11 +98,15 @@ func (h *Harvester) fetchScholarDOI(ctx context.Context, doi string, options Fet
 	defer cancel()
 	candidates, err := h.resolver().googleScholarDOI(providerCtx, doi, providerCandidateMax)
 	if err != nil {
+		kind := errorKind(err)
+		if errors.Is(err, errScholarNoExactDOI) {
+			kind = errorKindMissing
+		}
 		return providerResult(
 			doi,
 			sourceGoogleScholar,
 			err.Error(),
-			errorKind(err),
+			kind,
 			0,
 			strings.Contains(strings.ToLower(err.Error()), errorKindChallenge),
 			[]string{sourceGoogleScholar},

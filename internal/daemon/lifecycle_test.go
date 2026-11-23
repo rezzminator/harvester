@@ -95,9 +95,15 @@ func foreground(t *testing.T, runtime config.Runtime) {
 	})
 	ready, cancelReady := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancelReady()
+	// Probe as fast as a starting proxy can: a starting daemon reads absent until it serves, never
+	// half made (its socket bound but not yet private).
 	for {
-		if _, err := Status(ready, runtime); err == nil {
+		_, err := Status(ready, runtime)
+		if err == nil {
 			return
+		}
+		if !errors.Is(err, ErrDaemonAbsent) && ready.Err() == nil {
+			t.Fatalf("startup probe = %v, want %v or a healthy daemon", err, ErrDaemonAbsent)
 		}
 		select {
 		case err := <-done:
@@ -105,7 +111,7 @@ func foreground(t *testing.T, runtime config.Runtime) {
 			t.Fatalf("daemon stopped before ready: %v", err)
 		case <-ready.Done():
 			t.Fatal("daemon did not become healthy")
-		case <-time.After(5 * time.Millisecond):
+		default:
 		}
 	}
 }

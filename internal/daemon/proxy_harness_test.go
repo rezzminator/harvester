@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,39 +20,76 @@ type proxyTestHarness struct {
 	input  *io.PipeWriter
 	output *bufio.Reader
 	cancel context.CancelFunc
-	done   chan error
+	// stopped closes once the proxy under test returned; err holds what it returned.
+	stopped chan struct{}
+	err     error
+}
+
+// errProxyTestStopped fails a write the stopped proxy will never read; the failure names the proxy's error.
+var errProxyTestStopped = errors.New("stdio proxy stopped")
+
+// proxyTestWriteLimit bounds a write the proxy has not read: a live proxy reads its next frame once
+// the daemon it ensures has started, within startupTimeout.
+const proxyTestWriteLimit = startupTimeout
+
+// newProxyTestHarness runs one proxy over two pipes. When the proxy returns, its error is recorded
+// and both pipes close, so a pending write or read fails at once and names that error.
+func newProxyTestHarness(run func(ctx context.Context, input io.Reader, output io.Writer) error) (*proxyTestHarness, *io.PipeReader) {
+	ctx, cancel := context.WithCancel(context.Background())
+	input, inputWriter := io.Pipe()
+	output, outputWriter := io.Pipe()
+	harness := &proxyTestHarness{
+		input: inputWriter, output: bufio.NewReader(output), cancel: cancel, stopped: make(chan struct{}),
+	}
+	go func() {
+		harness.err = run(ctx, input, outputWriter)
+		close(harness.stopped)
+		_ = input.CloseWithError(errProxyTestStopped)
+		_ = outputWriter.Close()
+	}()
+	return harness, output
+}
+
+// outcome names the proxy's state for a failure message, waiting briefly for a proxy that is stopping.
+func (harness *proxyTestHarness) outcome() string {
+	select {
+	case <-harness.stopped:
+		return fmt.Sprintf("stdio proxy returned: %v", harness.err)
+	case <-time.After(2 * time.Second):
+		return "stdio proxy still running"
+	}
 }
 
 func startProxyTestHarness(t *testing.T, proxy *stdioProxy) *proxyTestHarness {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	input, inputWriter := io.Pipe()
-	output, outputWriter := io.Pipe()
-	done := make(chan error, 1)
-	go func() {
-		done <- proxy.run(ctx, input, outputWriter)
-		_ = outputWriter.Close()
-	}()
-	harness := &proxyTestHarness{
-		input: inputWriter, output: bufio.NewReader(output), cancel: cancel, done: done,
-	}
+	harness, output := newProxyTestHarness(proxy.run)
 	t.Cleanup(func() {
-		_ = inputWriter.Close()
+		_ = harness.input.Close()
 		go func() { _, _ = io.Copy(io.Discard, output) }()
 		select {
-		case <-done:
+		case <-harness.stopped:
 		case <-time.After(2 * time.Second):
 			t.Error("stdio proxy did not stop after cancellation")
 		}
-		cancel()
+		harness.cancel()
 	})
 	return harness
 }
 
 func (harness *proxyTestHarness) write(t *testing.T, frame string) {
 	t.Helper()
-	if _, err := io.WriteString(harness.input, frame+"\n"); err != nil {
-		t.Fatal(err)
+	written := make(chan error, 1)
+	go func() {
+		_, err := io.WriteString(harness.input, frame+"\n")
+		written <- err
+	}()
+	select {
+	case err := <-written:
+		if err != nil {
+			t.Fatalf("write proxy frame %s: %v; %s", frame, err, harness.outcome())
+		}
+	case <-time.After(proxyTestWriteLimit):
+		t.Fatalf("proxy did not read frame %s within %s; %s", frame, proxyTestWriteLimit, harness.outcome())
 	}
 }
 
@@ -74,9 +113,9 @@ func (harness *proxyTestHarness) read(t *testing.T) map[string]any {
 		}
 		return frame
 	case err := <-errors:
-		t.Fatal(err)
+		t.Fatalf("read proxy response: %v; %s", err, harness.outcome())
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for proxy response")
+		t.Fatalf("timed out waiting for proxy response; %s", harness.outcome())
 	}
 	return nil
 }

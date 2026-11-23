@@ -3,6 +3,7 @@ package harvest
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -59,5 +60,43 @@ func TestGoogleScholarKeepsBibliographicFields(t *testing.T) {
 			got[0].URL != "https://repository.example/article.pdf" {
 			t.Errorf("%s: Scholar bibliographic fields = %#v err=%v", tc.name, got, err)
 		}
+	}
+}
+
+// TestDOIWithNoOpenCopyAnywhereReadsAsNoOpenCopy: every open-access source
+// answers and lists no copy, and Google Scholar, the last fallback, answers a
+// page without the DOI. Scholar looked and found nothing — the work has no
+// open copy, never a connection that failed and should be retried.
+func TestDOIWithNoOpenCopyAnywhereReadsAsNoOpenCopy(t *testing.T) {
+	withPublicDNSForProviderTest(t)
+	const doi = "10.1234/provider.fixture"
+	var scholarAsked int
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host == "scholar.test" {
+			scholarAsked++
+			return response(r, http.StatusOK, "text/html",
+				`<html><body><p>Your search did not match any articles.</p></body></html>`), nil
+		}
+		return jsonResponse(r, `{}`), nil
+	})}
+	h := mustNew(t, Options{
+		CacheDir:         t.TempDir(),
+		Client:           client,
+		Chrome:           fixtureTwin(client),
+		Jina:             client,
+		OA:               fixtureTwin(client),
+		Converter:        &fakeConverter{},
+		ContactEmail:     "qa@example.test",
+		GoogleScholarURL: "https://scholar.test",
+		BrowserRung:      browserOff(),
+		Clock:            newPacingClock(),
+	})
+	got := h.fetchKnownID(context.Background(), doi, IdentifierDOI, FetchOptions{})
+	public := PublicFailure(doi, got)
+	const want = "No open copy of this work could be retrieved: every open-access source and mirror tried failed, " +
+		"so the work is likely paywalled, and the harvester never signs in."
+	if scholarAsked == 0 || public.ErrorKind != errorKindNoOpenCopy || !strings.HasPrefix(public.Error, want) {
+		t.Fatalf("Scholar asked %d time(s); public kind %q, error %q;\nwant kind %q, error starting %q\ninternal: kind %q, %s",
+			scholarAsked, public.ErrorKind, public.Error, errorKindNoOpenCopy, want, got.ErrorKind, got.Error)
 	}
 }
