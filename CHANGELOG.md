@@ -17,6 +17,7 @@ Every release of harvester. Versions follow [semantic versioning](https://semver
 - A failed read names the rungs it tried again (`Rungs tried: direct, chrome-impersonation, …`): the failure was worded twice, and the second wording, the one the caller reads, no longer had them.
 - The launcher leaves a stable link that already names its version alone, and clears a staged link a dead launcher left under its own process id: an `mv` that kept its source stranded a `.harvester-link-{pid}` file in the binary home on every start.
 - An `ask` over a long document gets the time it needs: its deadline adds one second per KiB of content to the 2 minutes plus 30 seconds per item, up to 10 minutes. A quoting question over a 130 KB paper takes about 170 seconds and was cut at 150.
+- Two chats starting at once both connect their harvester MCP server. The daemon's socket showed at its path for a moment before it was made private, and a chat that looked in that moment failed with `refuse unsafe daemon state … daemon.sock mode=Srwxr-xr-x (need 0600)`; the daemon now binds the socket under another name, makes it private and only then moves it into place.
 
 ## [0.3.0] — 2026-11-20
 

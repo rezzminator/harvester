@@ -184,7 +184,13 @@ func serve(ctx context.Context, runtime config.Runtime, drainWindow, handoffWind
 	if err := checkSocketPath(socket); err != nil {
 		return err
 	}
-	listener, err := net.Listen("unix", socket)
+	// The socket appears at its path already private: bound under another name, made 0600, then renamed
+	// in. A proxy probing while this daemon starts reads it absent, never as an unsafe socket.
+	bind := paths.DaemonSocketBind(runtime.Paths.Home)
+	if err := os.Remove(bind); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove leftover daemon socket bind: %w", err)
+	}
+	listener, err := net.Listen("unix", bind)
 	if err != nil {
 		return fmt.Errorf("listen daemon socket: %w", err)
 	}
@@ -195,8 +201,11 @@ func serve(ctx context.Context, runtime config.Runtime, drainWindow, handoffWind
 			returnErr = errors.Join(returnErr, err)
 		}
 	}()
-	if err := os.Chmod(socket, 0o600); err != nil {
-		return err
+	if err := os.Chmod(bind, 0o600); err != nil {
+		return errors.Join(fmt.Errorf("protect daemon socket: %w", err), os.Remove(bind))
+	}
+	if err := os.Rename(bind, socket); err != nil {
+		return errors.Join(fmt.Errorf("publish daemon socket: %w", err), os.Remove(bind))
 	}
 	socketInfo, err := os.Lstat(socket)
 	if err != nil {

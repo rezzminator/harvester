@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -53,29 +52,23 @@ exec "$HARVESTER_VERSION_TEST_BINARY" "$@"
 
 func startRuntimeProxy(t *testing.T, runtime config.Runtime) *proxyTestHarness {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	input, feed := io.Pipe()
-	output, receive := io.Pipe()
-	done := make(chan error, 1)
-	go func() {
-		done <- Proxy(ctx, runtime, input, receive, io.Discard)
-		receive.Close()
-	}()
-	harness := &proxyTestHarness{input: feed, output: bufio.NewReader(output), cancel: cancel, done: done}
+	harness, output := newProxyTestHarness(func(ctx context.Context, input io.Reader, output io.Writer) error {
+		return Proxy(ctx, runtime, input, output, io.Discard)
+	})
 	t.Cleanup(func() {
-		feed.Close()
+		harness.input.Close()
 		go io.Copy(io.Discard, output)
 		select {
-		case err := <-done:
-			if err != nil {
-				t.Error(err)
-			}
+		case <-harness.stopped:
 		case <-time.After(3 * time.Second):
-			cancel()
-			<-done
+			harness.cancel()
+			<-harness.stopped
 			t.Error("runtime proxy did not stop")
 		}
-		cancel()
+		if harness.err != nil {
+			t.Error(harness.err)
+		}
+		harness.cancel()
 	})
 	return harness
 }
