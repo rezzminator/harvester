@@ -4,6 +4,8 @@ Every release of harvester. Versions follow [semantic versioning](https://semver
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-11-23
+
 ### Added
 
 - **A Reddit page the server cannot reach is read from the public archive.** Reddit refuses many server addresses outright: the page, `old.reddit.com`, the `.json` and `.rss` twins and the readers all answer HTTP 403. A Reddit address no live rung could read is now answered from the Arctic Shift archive of Reddit's posts and comments: a thread with its comment tree (or one comment's branch), a subreddit's listing (`top` ranked here by archived score), a search inside one subreddit, and a subreddit's about page. The result reads `via: reddit-archive` and is marked partial, naming the archive, the day of its record and what the answer leaves out; a call the archive sheds under load (HTTP 422, 429 or a server error) is asked again after 2 and then 5 seconds; when the archive cannot stand in, the failure says whether it could not be read or holds no record.
