@@ -1,5 +1,7 @@
 # Harvester
 
+[![rezzminator/harvester MCP server](https://glama.ai/mcp/servers/rezzminator/harvester/badges/score.svg)](https://glama.ai/mcp/servers/rezzminator/harvester)
+
 ## Contents
 
 - [Commands](#commands)
