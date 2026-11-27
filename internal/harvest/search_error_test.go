@@ -139,8 +139,8 @@ func TestProbeSearchReportsEveryState(t *testing.T) {
 		if probe.State != SearchProbeReachable || probe.Warning || probe.Backend != "searxng" {
 			t.Fatalf("ProbeSearch(reachable) = %+v, want reachable/searxng, no warning", probe)
 		}
-		if !strings.Contains(probe.Detail, "json format is not probed") {
-			t.Fatalf("ProbeSearch(reachable).Detail = %q, want the json-format caveat", probe.Detail)
+		if want := "reachable (health only — the search probe row checks the json format)"; probe.Detail != want {
+			t.Fatalf("ProbeSearch(reachable).Detail = %q, want %q", probe.Detail, want)
 		}
 	})
 	t.Run("searxng unreachable", func(t *testing.T) {

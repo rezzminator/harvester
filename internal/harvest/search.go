@@ -383,8 +383,9 @@ type SearchProbe struct {
 // query. OFF (disabled or unconfigured) is a named state, not a warning — a
 // server that never turned search on is not broken. SearXNG gets a
 // GET <url>/healthz: this proves the origin answers HTTP, not that its json
-// format (which /search itself needs) is enabled — that distinction is kept
-// in the detail text rather than implied by a bare "reachable". Brave is
+// format (which /search itself needs) is enabled — the detail text says so
+// and points at doctor's search probe row, which runs one JSON search after
+// every reachable health check (internal/doctor printSearchProbeDoctor). Brave is
 // never probed: every probe would spend the operator's paid quota, so a
 // configured key reports "configured" outright.
 func ProbeSearch(ctx context.Context, options SearchOptions, client *http.Client) SearchProbe {
@@ -415,7 +416,7 @@ func ProbeSearch(ctx context.Context, options SearchOptions, client *http.Client
 			return SearchProbe{
 				State:   SearchProbeReachable,
 				Backend: searchBackendSearXNG,
-				Detail:  "reachable (health only — the json format is not probed)",
+				Detail:  "reachable (health only — the search probe row checks the json format)",
 			}
 		}
 		return SearchProbe{
