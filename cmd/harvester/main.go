@@ -23,6 +23,7 @@ import (
 	"github.com/rezzminator/harvester/internal/installping"
 	"github.com/rezzminator/harvester/internal/obs"
 	"github.com/rezzminator/harvester/internal/paths"
+	"github.com/rezzminator/harvester/internal/searxng"
 	"github.com/rezzminator/harvester/internal/setup"
 )
 
@@ -155,6 +156,10 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 				return 1
 			}
 			fmt.Fprintln(stdout, string(data))
+			// stdout stays harvester.config.json's shape; the backend in effect, which the managed record can
+			// supply, goes beside it.
+			backend := searxng.Resolve(runtime.Paths.Home, runtime.Config.Harvester.Search)
+			fmt.Fprintln(stderr, "harvester config: search backend in effect:", backend.Describe())
 			return 0
 		}
 	}

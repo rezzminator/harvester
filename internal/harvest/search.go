@@ -40,7 +40,8 @@ const searchUA = "harvester-mcp/1.0"
 var (
 	ErrSearchDisabled      = errors.New("search is disabled (search.enabled=false in harvester.config.json)")
 	ErrSearchNotConfigured = errors.New(
-		"search is not configured: set search.searxngURL and/or search.braveApiKey in harvester.config.json",
+		"search is not configured: run harvester setup with Docker running for a managed SearXNG, " +
+			"or set search.searxngURL and/or search.braveApiKey in harvester.config.json",
 	)
 )
 

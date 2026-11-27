@@ -31,7 +31,7 @@ func printHarvestCacheDoctor(stdout io.Writer, harvester config.HarvesterConfig)
 	root, rootErr := harvest.CacheRoot(harvester.Cache.Dir)
 	if rootErr != nil {
 		// An unresolvable root is "we failed to look", never "0 entries".
-		fmt.Fprintf(stdout, "doctor: harvester_cache dir=? error=%v\n", rootErr)
+		fmt.Fprintf(stdout, "doctor: harvester_cache dir=? error=%v hint=set cache.dir in %s to a directory this user owns\n", rootErr, config.HarvesterFileName)
 		return 1
 	}
 	entries := 0
@@ -54,11 +54,13 @@ func printHarvestCacheDoctor(stdout io.Writer, harvester config.HarvesterConfig)
 	if walkErr != nil {
 		fmt.Fprintf(
 			stdout,
-			"doctor: harvester_cache dir=%s entries=%d ttl=%s error=%v\n",
+			"doctor: harvester_cache dir=%s entries=%d ttl=%s error=%v hint=make %s readable by this user, or set cache.dir in %s\n",
 			root,
 			entries,
 			ttlText,
 			walkErr,
+			root,
+			config.HarvesterFileName,
 		)
 		return 1
 	}
@@ -66,26 +68,33 @@ func printHarvestCacheDoctor(stdout io.Writer, harvester config.HarvesterConfig)
 	return 0
 }
 
-// printHarvestSearchDoctor prints the search tool's one health line; the
-// probe itself (OFF/reachable/UNREACHABLE/configured classification) lives in
-// harvest.ProbeSearch, never here — cmd/harvester is dispatch, not policy.
-func printHarvestSearchDoctor(ctx context.Context, stdout io.Writer, harvester config.HarvesterConfig) int {
+// printHarvestSearchDoctor prints the search tool's one health line for the
+// SearXNG origin in effect (the operator's or the managed one, searxng.Origin);
+// the probe itself (OFF/reachable/UNREACHABLE/configured classification) lives
+// in harvest.ProbeSearch, never here — cmd/harvester is dispatch, not policy.
+func printHarvestSearchDoctor(ctx context.Context, stdout io.Writer, harvester config.HarvesterConfig, origin string) int {
 	probe := harvest.ProbeSearch(ctx, harvest.SearchOptions{
-		SearXNGURL:    harvester.Search.SearXNGURL,
+		SearXNGURL:    origin,
 		BraveAPIKey:   harvester.Search.BraveAPIKey,
 		DisableSearch: !harvester.Search.Enabled,
 	}, nil)
 	fmt.Fprintf(
 		stdout,
-		"doctor: harvester search state=%s backend=%s detail=%s\n",
+		"doctor: harvester search state=%s backend=%s detail=%s",
 		probe.State,
 		probe.Backend,
 		probe.Detail,
 	)
-	if probe.Warning {
-		return 1
+	if !probe.Warning {
+		fmt.Fprintln(stdout)
+		return 0
 	}
-	return 0
+	fix := "check that the SearXNG at search.searxngURL is running"
+	if origin != harvester.Search.SearXNGURL {
+		fix = "run harvester setup with Docker running; it starts the managed SearXNG"
+	}
+	fmt.Fprintf(stdout, " hint=%s\n", fix)
+	return 1
 }
 
 func configuredHarvestDoctor() harvestDoctor {
@@ -121,16 +130,17 @@ func printHarvestPythonDoctorWithRunner(
 	current := harvestpy.RuntimeRoot(root, platform)
 	interpreter := filepath.Join(current, "project", ".venv", "bin", "python")
 	if _, err := os.Lstat(root); errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintln(stdout, "doctor: harvestpy skipped")
-		// The conversion env is absent (honest absence), but the opt-in
-		// browser row must still report: with fetch.browser on a missing
-		// environment is the NOT_PROVISIONED state, never silence.
+		// Every read that needs conversion fails without the environment, so
+		// its absence is a warning naming the fix; the opt-in browser row
+		// still reports: with fetch.browser on a missing environment is the
+		// NOT_PROVISIONED state, never silence.
+		fmt.Fprintf(stdout, "doctor: harvestpy env=NOT_PROVISIONED root=%s error=the conversion environment is not provisioned, so reads that need conversion fail hint=run harvester setup\n", root)
 		return appendHarvestBrowserDoctorRowWithRunner(
 			ctx,
 			stdout,
 			root,
 			platform,
-			0,
+			1,
 			browserGate,
 			runner,
 			func() string {
@@ -225,6 +235,9 @@ func printHarvestPythonDoctorWithRunner(
 		fmt.Fprintf(stdout, "doctor: harvestpy live_smoke=(file) broken error=%s\n", smokeErr)
 	}
 	warnings += printUnnamedHarvestChecks(stdout, report, harvestNamedDoctorChecks)
+	if warnings != 0 {
+		fmt.Fprintln(stdout, "doctor: harvestpy hint=run harvester setup to reprovision the conversion environment")
+	}
 	return appendHarvestBrowserDoctorRowWithRunner(
 		ctx,
 		stdout,

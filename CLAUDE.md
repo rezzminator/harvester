@@ -2,23 +2,29 @@
 
 Cached handles and external gateway credentials outlive one process: migration changes must preserve both.
 
+Where Vocabulary or Runtime disagrees with the code on a path, command or convention, follow the code and name each mismatch in your reply; `# Rules` binds regardless.
+
 # Vocabulary
 
 - binary: command dispatch · `cmd/harvester/`
 - harvest: source resolution, fetching, search, conversion dispatch and cached handles · `internal/harvest/`
 - conversion sidecar: pinned Python environment, OCR models and browser worker · `internal/harvestpy/`
 - MCP: tool schemas, content blocks and authenticated gateway · `internal/harvestmcp/`
-- CLI: one-shot read, download, search and ask rendering · `internal/harvestcli/`
+- read budget: one `read` answer's text stays within `output.maxResultBytes` UTF-8 bytes (default 50000), its items sharing it fairly after each one's `output.maxInlineChars`; `read` declares it to Claude Code as its `maxResultSizeChars` tool metadata · `internal/harvestmcp/service_render.go`
+- offset: a `read` input paging one cached item; a cut item's `truncated:` line names the `offset` that continues it · `internal/harvest/cache.go`
+- CLI: one-shot read, download, search and ask rendering; a read renders through MCP's `RenderReadItems`, under the same read budget · `internal/harvestcli/`
 - ask: source questions through Claude or Codex executables · `internal/ask/`, `internal/engine/`
 - configuration: `$HARVESTER_CONFIG`, else `${XDG_CONFIG_HOME:-$HOME/.config}/harvester/harvester.config.json` · `internal/config/`
-- state: `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/`, holding python, ask and cache; explicit cache and gateway state paths remain operator-owned · `internal/paths/`
+- state: `${XDG_STATE_HOME:-$HOME/.local/state}/harvester/`, holding python, ask, cache and search; explicit cache and gateway state paths remain operator-owned · `internal/paths/`
 - daemon: shared engine MCP service with a 0600 `{state}/daemon.sock`, exclusive `{state}/daemon.lock` and `daemon.log` in the log directory, `$PLUGIN_LOG_DIR/harvester`, else `{state}/logs` · `internal/daemon/`
 - stdio proxy: `harvester mcp`, forwarding to daemon with session recovery and uncertain-delivery errors · `internal/daemon/proxy.go`
-- setup: conversion provisioning and external gateway login service · `internal/setup/`
-- doctor: configuration, cache, search and conversion health rows · `internal/doctor/`
+- managed search: the harvester's own SearXNG container `harvester-searxng`, created on a pinned image or adopted as found, when search is on, `search.managed` is not false and neither `search.searxngURL` nor `search.braveApiKey` is set; its facts live in `{state}/search/managed.json`, never in configuration · `internal/searxng/`
+- setup: conversion provisioning, managed search and external gateway login service · `internal/setup/`
+- doctor: binary, daemon, configuration, gateway, cache, search, output, tools, logs and conversion health rows; exit 1 on any warning · `internal/doctor/`
 - testjail: isolated process homes and environment for test packages · `internal/testjail/`
 - install count: `harvester mcp`'s anonymous once-per-UTC-day ping, its `{state}/install-id` and `{state}/install-ping-day` files and opt-outs `$HARVESTER_INSTALL_PING_OFFLINE`, `$DO_NOT_TRACK` · `internal/installping/`
-- plugin: the installable manifest, launcher and release checksums · `plugins/harvester/`
+- plugin: the installable manifests, launcher, release checksums and Claude Code commands · `plugins/harvester/`
+- marketplace: the Claude Code and Codex plugin listings · `.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json`
 - launcher: installs a checksum-verified versioned binary under `${HARVESTER_HOME:-$HOME/.local/share/harvester}` and maintains `{HARVESTER_HOME}/bin/harvester` · `plugins/harvester/libexec/harvester`
 - release: version and checksum gates, reproducible assets · `scripts/release-check.sh`, `scripts/build-release.sh`
 - CI: the pull-request checks and the publish on merge · `.github/workflows/ci.yml`, `.github/workflows/publish.yml`
@@ -28,9 +34,11 @@ Cached handles and external gateway credentials outlive one process: migration c
 
 ## Local
 
-- Follow the testing manual for isolation; from the module root: `go build ./... && go vet ./... && go test ./...`.
+- Checks run on the host from the module root, testjail isolating every test package; narrowest: `go test ./internal/{package} -run {Test}`; while building: `go build ./... && go vet ./... && go test ./...`; done-gate: `make check`.
 - `harvester serve` runs daemon in the foreground without an idle exit; stdio proxy starts it detached and replaces an outdated version using the installed binary.
-- `harvester setup [--offline]` provisions conversion and starts daemon; `external.enabled` also installs its login service and opens the authenticated gateway in that process.
+- Every daemon start ensures managed search beside the socket, never delaying it; a backend turning ready changes the daemon's identity, so the next call any stdio proxy makes replaces it and sessions started after list `search_web`, while running sessions keep their tools; a boot check that finds the recorded container silent keeps its ready record (`KeepReady`).
+- `harvester setup [--offline]` provisions conversion, then readies managed search (`--offline` never pulls; without Docker, one row and no exit-code change), then starts daemon; `external.enabled` also installs its login service and opens the authenticated gateway in that process.
+- `harvester doctor [--json] [--skip-conversion]` prints the health rows; `harvester config show` names the search backend in effect on stderr.
 - `harvester status [--json]` reports pid, version, uptime, endpoint and gateway state; `harvester stop` drains daemon.
 - Release inputs: `scripts/release-check.sh`; checksum reproduction: `scripts/release-check.sh --release`.
 - Build assets and refresh the launcher's checksum manifest: `scripts/build-release.sh --write-sums`.

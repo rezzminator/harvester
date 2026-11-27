@@ -324,6 +324,9 @@ type FetchOptions struct {
 	// Field is the request field the source came in (urls, files,
 	// publications), recorded in the public artifact's frontmatter.
 	Field string
+	// Offset is the characters of the item's content the public result's
+	// inline content skips (read's offset): a later page of the same artifact.
+	Offset int
 }
 
 // Result is deliberately JSON-friendly so the MCP adapter can return it
@@ -344,6 +347,9 @@ type Result struct {
 	Challenge    bool     `json:"challenge,omitempty"`
 	HTTPStatus   int      `json:"http_status,omitempty"`
 	RetryAfter   string   `json:"retry_after,omitempty"`
+	// Offset is the character of the item's content Content starts at: the
+	// FetchOptions.Offset a public result was read with.
+	Offset int `json:"offset,omitempty"`
 	// Partial names why the artifact is known to be INCOMPLETE — a recall gate
 	// below its floor, lazy-loaded content still arriving when the browser
 	// rung's scroll cap hit, a thread whose comments are only partly in the

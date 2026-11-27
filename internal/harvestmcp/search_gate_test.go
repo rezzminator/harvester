@@ -26,7 +26,7 @@ func TestServerInstructionsNameSearchOnlyWhenConfigured(t *testing.T) {
 	clause6 := `search the web for a topic → search_web`
 
 	const perItem = ` Answers are text, one "=== [n/N]" block per item: "No … found" is nothing found, an error is a failed lookup.`
-	const searchOff = ` Web search is not configured on this server — set search.searxngURL or search.braveApiKey in harvester.config.json to enable web search.`
+	const searchOff = ` Web search is not configured on this server — run harvester setup with Docker running, or set search.searxngURL or search.braveApiKey in harvester.config.json, to enable web search.`
 	join := func(clauses ...string) string { return strings.Join(clauses, "; ") + "." + perItem }
 	joinOff := func(clauses ...string) string { return join(clauses...) + searchOff }
 
@@ -93,6 +93,11 @@ func TestRenderSearchFailureRendersConfigurationStatesVerbatim(t *testing.T) {
 			got,
 			harvest.ErrSearchNotConfigured.Error(),
 		)
+	}
+	const notConfigured = "search is not configured: run harvester setup with Docker running for a managed SearXNG, " +
+		"or set search.searxngURL and/or search.braveApiKey in harvester.config.json"
+	if got := renderSearchFailure(harvest.ErrSearchNotConfigured); got != notConfigured {
+		t.Fatalf("renderSearchFailure(not configured) = %q, want %q", got, notConfigured)
 	}
 	if got := renderSearchFailure(harvest.ErrSearchDisabled); got != harvest.ErrSearchDisabled.Error() {
 		t.Fatalf(

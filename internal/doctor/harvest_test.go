@@ -289,13 +289,14 @@ func TestDoctorHarvestUnnamedFailedCheckIsNotHiddenAsClean(t *testing.T) {
 	}
 }
 
-func TestDoctorHarvestMissingRootIsSkipped(t *testing.T) {
+func TestDoctorHarvestMissingRootWarnsNotProvisioned(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "")
+	home := t.TempDir()
 	var output strings.Builder
 	warnings := printHarvestPythonDoctorWithRunner(
 		context.Background(),
 		&output,
-		t.TempDir(),
+		home,
 		harvestpy.Platform{GOOS: "linux", GOARCH: "amd64"},
 		harvestDoctorFake{
 			inspect:  errors.New("harvestpy root is absent"),
@@ -304,13 +305,15 @@ func TestDoctorHarvestMissingRootIsSkipped(t *testing.T) {
 		false,
 		&deps.FakeRunner{},
 	)
-	if warnings != 0 {
-		t.Fatalf("missing harvest root warnings=%d, want 0\n%s", warnings, output.String())
+	if warnings != 1 {
+		t.Fatalf("missing harvest root warnings=%d, want 1\n%s", warnings, output.String())
 	}
-	// The skipped conversion env is followed by the informational gate-off
-	// browser row (absence of an opt-in environment is not a defect).
+	// An absent conversion environment fails every read that needs conversion,
+	// so it is a warning naming its fix; the informational gate-off browser row
+	// follows (absence of an opt-in environment is not a defect).
 	// S7: even disabled, never-provisioned is NAMED, not folded into a bare "disabled".
-	if got, want := output.String(), "doctor: harvestpy skipped\ndoctor: harvestpy_browser env=NOT_PROVISIONED disabled gate=fetch.browser "+browserProvisionHintOff+"\n"; got != want {
+	root := filepath.Join(home, ".local", "state", "harvester", "python")
+	if got, want := output.String(), "doctor: harvestpy env=NOT_PROVISIONED root="+root+" error=the conversion environment is not provisioned, so reads that need conversion fail hint=run harvester setup\ndoctor: harvestpy_browser env=NOT_PROVISIONED disabled gate=fetch.browser "+browserProvisionHintOff+"\n"; got != want {
 		t.Fatalf("missing harvest root output=%q, want %q", got, want)
 	}
 }
@@ -574,7 +577,7 @@ func TestDoctorHarvestBrowserRowDistinguishesItsBrokenStates(t *testing.T) {
 }
 
 // TestDoctorBrowserRowPrintsEvenWhenHarvestpyIsSkipped pins the fence-found
-// gap: a host with NO harvest-python root takes the early "harvestpy skipped"
+// gap: a host with NO harvest-python root takes the early "not provisioned"
 // return — the browser row must still print there, or a gated-on unprovisioned
 // rung renders as silence.
 func TestDoctorBrowserRowPrintsEvenWhenHarvestpyIsSkipped(t *testing.T) {
@@ -593,7 +596,7 @@ func TestDoctorBrowserRowPrintsEvenWhenHarvestpyIsSkipped(t *testing.T) {
 		!strings.Contains(output.String(), "NOT_PROVISIONED") {
 		t.Fatalf("skipped-harvestpy host lost the browser row: %q", output.String())
 	}
-	if warnings != 1 {
-		t.Fatalf("unprovisioned browser env with the gate on must warn, got %d", warnings)
+	if warnings != 2 {
+		t.Fatalf("unprovisioned conversion and browser envs with the gate on must warn twice, got %d", warnings)
 	}
 }

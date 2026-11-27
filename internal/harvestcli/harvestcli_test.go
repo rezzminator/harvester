@@ -2,11 +2,17 @@ package harvestcli
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/rezzminator/harvester/internal/harvest"
 )
 
 // harvestLocal runs `harvester` over args with a fresh local text file
@@ -88,5 +94,88 @@ func TestHarvestDownloadVerbPointsAtDownloadFile(t *testing.T) {
 			stdout,
 			stderr,
 		)
+	}
+}
+
+// TestHarvestPagesALongSourceByOffset: harvester applies the read tool's
+// answer budget; --json names the offset that continues a cut source
+// (next_offset) and keeps chars, and following --offset to the end
+// reproduces the source's whole text; --offset with two sources is refused
+// by name.
+func TestHarvestPagesALongSourceByOffset(t *testing.T) {
+	runtime := downloadRuntime(t)
+	runtime.Config.Harvester.Output.MaxResultBytes = 700
+	var body strings.Builder
+	for line := range 60 {
+		fmt.Fprintf(&body, "Reading %d: Ünïcödé — 日本語 ✓ 🌊\n", line)
+	}
+	source := filepath.Join(runtime.Paths.Home, "long.txt")
+	if err := os.WriteFile(source, []byte(body.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.TrimSpace(body.String())
+	var stdout, stderr bytes.Buffer
+	if code := Harvest([]string{source}, &stdout, &stderr, runtime); code != 0 ||
+		len(stdout.String()) > 701 || !strings.Contains(stdout.String(), "\ntruncated: chars 0-") {
+		t.Fatalf("text read code=%d %d bytes stdout=%q stderr=%q", code, len(stdout.String()), stdout.String(), stderr.String())
+	}
+	var got strings.Builder
+	offset, pages := 0, 0
+	for {
+		stdout.Reset()
+		stderr.Reset()
+		if code := Harvest([]string{source, "--json", "--offset", strconv.Itoa(offset)}, &stdout, &stderr, runtime); code != 0 {
+			t.Fatalf("--offset %d code=%d stderr=%q", offset, code, stderr.String())
+		}
+		var results []struct {
+			Content    string `json:"content"`
+			Chars      int    `json:"chars"`
+			Offset     int    `json:"offset"`
+			NextOffset *int   `json:"next_offset"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &results); err != nil || len(results) != 1 {
+			t.Fatalf("--offset %d JSON %v: %s", offset, err, stdout.String())
+		}
+		result := results[0]
+		if result.Chars != utf8.RuneCountInString(want) || result.Offset != offset {
+			t.Fatalf("--offset %d: chars %d offset %d, want %d and %d", offset, result.Chars, result.Offset,
+				utf8.RuneCountInString(want), offset)
+		}
+		pages++
+		if result.NextOffset == nil {
+			got.WriteString(strings.TrimRight(result.Content, " \t\r\n"))
+			break
+		}
+		content, cut := strings.CutSuffix(result.Content, harvest.InlineTruncationNote)
+		if !cut || *result.NextOffset <= offset {
+			t.Fatalf("--offset %d: next_offset %d, content %q", offset, *result.NextOffset, result.Content)
+		}
+		got.WriteString(content)
+		offset = *result.NextOffset
+	}
+	if got.String() != want || pages < 3 {
+		t.Fatalf("%d pages concatenated:\n%q\nwant:\n%q", pages, got.String(), want)
+	}
+	code, stdout2, stderr2 := harvestLocal(t, "--offset", "4", source)
+	if code != 2 || !strings.Contains(stderr2, "--offset takes exactly one source") || stdout2 != "" {
+		t.Fatalf("--offset with two sources code=%d stdout=%q stderr=%q, want 2 naming the flag", code, stdout2, stderr2)
+	}
+	// The floor: a budget the headers alone fill shows no page, so no
+	// next_offset sends a JSON client back to the same call.
+	runtime.Config.Harvester.Output.MaxResultBytes = 1
+	stdout.Reset()
+	stderr.Reset()
+	if code := Harvest([]string{source, "--json"}, &stdout, &stderr, runtime); code != 0 {
+		t.Fatalf("withheld read code=%d stderr=%q", code, stderr.String())
+	}
+	var withheld []struct {
+		Content    string `json:"content"`
+		Chars      int    `json:"chars"`
+		NextOffset *int   `json:"next_offset"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &withheld); err != nil || len(withheld) != 1 ||
+		withheld[0].Chars != utf8.RuneCountInString(want) || withheld[0].Content != "" || withheld[0].NextOffset != nil {
+		t.Fatalf("withheld read JSON %v: %s, want chars %d, no content and no next_offset", err, stdout.String(),
+			utf8.RuneCountInString(want))
 	}
 }

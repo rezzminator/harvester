@@ -222,6 +222,12 @@ func serve(ctx context.Context, runtime config.Runtime, drainWindow, handoffWind
 		return nil
 	})
 	defer func() { returnErr = errors.Join(returnErr, removeSocket()) }()
+	// The digest is read before the service's runtime, so a search backend that
+	// turns ready in between leaves a stale digest, which a proxy replaces.
+	digest, err := identity(runtime)
+	if err != nil {
+		return err
+	}
 	runtimeService := runtimeForService(runtime)
 	service, err := harvestmcp.NewConfiguredHarvester(runtime.Version, runtimeService)
 	if err != nil {
@@ -244,10 +250,16 @@ func serve(ctx context.Context, runtime config.Runtime, drainWindow, handoffWind
 	stop := make(chan struct{})
 	var stopOnce sync.Once
 	requestDrain := func() { gate.drain(); stopOnce.Do(func() { close(stop) }) }
-	digest, err := identity(runtime)
-	if err != nil {
-		return err
-	}
+	searchCtx, stopSearch := context.WithCancel(ctx)
+	searchDone := make(chan struct{})
+	go func() {
+		defer close(searchDone)
+		bootSearch(searchCtx, runtime)
+	}()
+	defer func() {
+		stopSearch()
+		<-searchDone
+	}()
 	status := StatusInfo{Service: serviceMarker, PID: os.Getpid(), Version: runtime.Version, Started: time.Now().UTC(), Endpoint: socket, Gateway: runtime.Config.Harvester.External.Enabled, ConfigPath: runtime.Config.Path, ConfigDigest: digest}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

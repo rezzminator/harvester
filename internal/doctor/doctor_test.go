@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,8 +17,9 @@ import (
 func TestMain(m *testing.M) { os.Exit(testjail.Run(m)) }
 
 func TestDoctorJSONAndFailureExit(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "")
 	home := t.TempDir()
-	runtime := config.Runtime{Paths: paths.Values{Home: home}, Config: config.Config{Harvester: config.DefaultHarvester()}}
+	runtime := config.Runtime{Paths: paths.Values{Home: home}, Config: config.Config{Harvester: config.DefaultHarvester()}, Version: "0.4.0"}
 	runtime.Config.Harvester.Search.Enabled = false
 	runtime.Config.Harvester.Cache.Dir = filepath.Join(home, "cache")
 	var stdout, stderr bytes.Buffer
@@ -31,8 +33,32 @@ func TestDoctorJSONAndFailureExit(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || !report.Healthy {
 		t.Fatalf("report=%s error=%v", &stdout, err)
 	}
-	if !strings.Contains(strings.Join(report.Rows, "\n"), "skipped (--skip-conversion)") {
-		t.Fatal(report.Rows)
+	state := filepath.Join(home, ".local", "state", "harvester")
+	for _, want := range []string{
+		"doctor: daemon running=false socket=" + filepath.Join(state, "daemon.sock") + " (the first MCP session or harvester setup starts it)",
+		"doctor: search source=disabled detail=search.enabled is false",
+		"doctor: output maxResultBytes=50000 maxInlineChars=50000",
+		"doctor: tools new_session=read,download_file,search_literature search_web=not_listed reason=none (search.enabled is false)",
+		"doctor: logs dir=" + filepath.Join(state, "logs") + " absent (the first log write creates it)",
+		"doctor: harvestpy skipped (--skip-conversion)",
+	} {
+		if !slices.Contains(report.Rows, want) {
+			t.Fatalf("rows lack %q:\n%s", want, strings.Join(report.Rows, "\n"))
+		}
+	}
+	// Without --skip-conversion an absent conversion environment is a
+	// warning row naming its fix, and the exit code says so.
+	stdout.Reset()
+	if code := Run([]string{"--json"}, &stdout, &stderr, runtime); code != 1 {
+		t.Fatalf("absent conversion environment code=%d, want 1; rows=%s", code, &stdout)
+	}
+	report.Rows = nil
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil || report.Healthy {
+		t.Fatalf("report=%s error=%v", &stdout, err)
+	}
+	if want := "doctor: harvestpy env=NOT_PROVISIONED root=" + filepath.Join(state, "python") +
+		" error=the conversion environment is not provisioned, so reads that need conversion fail hint=run harvester setup"; !slices.Contains(report.Rows, want) {
+		t.Fatalf("rows lack %q:\n%s", want, strings.Join(report.Rows, "\n"))
 	}
 	if err := os.WriteFile(runtime.Config.Harvester.Cache.Dir, []byte("file"), 0o600); err != nil {
 		t.Fatal(err)
@@ -61,7 +87,7 @@ func TestSearchDisabledRow(t *testing.T) {
 	settings := config.DefaultHarvester()
 	settings.Search.Enabled = false
 	var rows bytes.Buffer
-	if warnings := printHarvestSearchDoctor(t.Context(), &rows, settings); warnings != 0 || !strings.Contains(rows.String(), "state=off") {
+	if warnings := printHarvestSearchDoctor(t.Context(), &rows, settings, ""); warnings != 0 || !strings.Contains(rows.String(), "state=off") {
 		t.Fatalf("warnings=%d rows=%s", warnings, &rows)
 	}
 }

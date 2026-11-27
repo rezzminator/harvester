@@ -12,6 +12,7 @@ import (
 	"github.com/rezzminator/harvester/internal/config"
 	"github.com/rezzminator/harvester/internal/harvestpy"
 	"github.com/rezzminator/harvester/internal/paths"
+	"github.com/rezzminator/harvester/internal/searxng"
 	"github.com/rezzminator/harvester/internal/testjail"
 )
 
@@ -47,7 +48,10 @@ func fixtureOperations(t *testing.T, root string, failHealth bool) operations {
 			return harvestpy.OCRStaging{}, nil
 		},
 		service: func(context.Context, config.Runtime) error { return nil },
-		ensure:  func(context.Context, config.Runtime) error { return nil },
+		search: func(context.Context, config.Runtime, bool) searxng.Result {
+			return searxng.Result{State: searxng.StateNoDocker, Detail: "fixture: no Docker"}
+		},
+		ensure: func(context.Context, config.Runtime) error { return nil },
 	}
 }
 
