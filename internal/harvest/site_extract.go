@@ -87,6 +87,10 @@ type siteExtractor struct {
 	// content even where the site served a wall in its place (harvest.go).
 	// Every markup extractor leaves it unset and keeps the wall guard.
 	readsSiteAPI bool
+	// mayRequestElsewhere, when set, lets a loader request another host where
+	// the target is one this site's software serves on every host (a
+	// federated reply read from its own Mastodon instance's public API).
+	mayRequestElsewhere func(target *url.URL) bool
 }
 
 var siteExtractors = []siteExtractor{
@@ -149,11 +153,12 @@ var siteExtractors = []siteExtractor{
 		readsSiteAPI: true,
 	},
 	{
-		name:         "mastodon-status",
-		detect:       isMastodon,
-		extract:      extractMastodonStatus,
-		loaders:      mastodonLoaders,
-		readsSiteAPI: true,
+		name:                "mastodon-status",
+		detect:              isMastodon,
+		extract:             extractMastodonStatus,
+		loaders:             mastodonLoaders,
+		readsSiteAPI:        true,
+		mayRequestElsewhere: isMastodonRemoteAPI,
 	},
 	{
 		name:         "gitlab-item",
@@ -251,6 +256,12 @@ var siteExtractors = []siteExtractor{
 		extract: extractLinkedInPage,
 	},
 	{
+		name:    "forum-topic",
+		detect:  isForumTopic,
+		extract: extractForumTopic,
+		loaders: forumLoaders,
+	},
+	{
 		name:    "discourse-topic",
 		detect:  isDiscourse,
 		extract: extractDiscourseTopic,
@@ -278,15 +289,24 @@ func (extractor siteExtractor) claims(page *url.URL, doc *html.Node) bool {
 }
 
 // mayRequest reports whether a loader of page may request target: a host the
-// extractor owns, or — for an extractor that knows pages by their markup —
-// the page's own host.
+// extractor owns, a target its mayRequestElsewhere accepts, or — for an
+// extractor that knows pages by their markup — the page's own host.
 func (extractor siteExtractor) mayRequest(page, target *url.URL) bool {
 	host := strings.ToLower(target.Hostname())
-	if extractor.ownsHost(host) {
+	if extractor.ownsHost(host) || (extractor.mayRequestElsewhere != nil && extractor.mayRequestElsewhere(target)) {
 		return true
 	}
 	return extractor.detect != nil && (target.Scheme == schemeHTTPS || target.Scheme == schemeHTTP) &&
 		host == strings.ToLower(page.Hostname())
+}
+
+// requestsElsewhere reports a target mayRequest accepts only through
+// mayRequestElsewhere: on a server other than the page's and the extractor's
+// own (another Mastodon instance), whose refusals say nothing of the site.
+func (extractor siteExtractor) requestsElsewhere(page, target *url.URL) bool {
+	host := strings.ToLower(target.Hostname())
+	return extractor.mayRequestElsewhere != nil && !extractor.ownsHost(host) &&
+		host != strings.ToLower(page.Hostname())
 }
 
 // SitePressesLoaders reports whether the browser rung may press source's

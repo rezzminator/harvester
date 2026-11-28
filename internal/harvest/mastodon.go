@@ -17,8 +17,8 @@ import (
 // known by its markup — the web app's mount point (div#mastodon) and its
 // initial-state script — never by its host. The page is an app shell: the
 // status and its replies are drawn in the browser from the instance's public
-// REST API, which the extractor reads instead, on the page's own host,
-// unauthenticated, through loaders.go's budget: the status's record
+// REST API, which the extractor reads instead, on the page's own host (and a
+// remote reply on its own instance, mastodon_replies.go), unauthenticated, through loaders.go's budget: the status's record
 // (/api/v1/statuses/{id}, its stated replies_count) and its context
 // (/api/v1/statuses/{id}/context: the ancestors and the descendants). Each
 // answer is checked to be this status's before it is kept in the page as a
@@ -125,6 +125,7 @@ func mastodonPageOf(doc *html.Node, page *url.URL) (mastodonPage, bool) {
 		pages: map[string]apRepliesPage{}, kept: map[string]bool{}, dropped: map[string]bool{},
 	}
 	statusesAPI := mastodonKey(state.origin + "/api/v1/statuses/")
+	var remote []mastodonRemoteAnswer
 	for _, node := range keptAnswers(doc, mastodonAnswerTag) {
 		key := nodeAttr(node, "key")
 		if nodeAttr(node, "dropped") != "" {
@@ -135,6 +136,9 @@ func mastodonPageOf(doc *html.Node, page *url.URL) (mastodonPage, bool) {
 		body := []byte(rawText(node))
 		var err error
 		switch kind := nodeAttr(node, "kind"); kind {
+		case mastodonKindRemoteReply, mastodonKindRemoteCtx:
+			remote = append(remote, mastodonRemoteAnswer{kind: kind, target: strings.TrimPrefix(key, mastodonKey("")),
+				body: body})
 		case mastodonKindStatus:
 			var status mastodonStatus
 			if err = json.Unmarshal(body, &status); err == nil {
@@ -167,6 +171,7 @@ func mastodonPageOf(doc *html.Node, page *url.URL) (mastodonPage, bool) {
 			state.undecoded++
 		}
 	}
+	state.readRemote(remote)
 	return state, true
 }
 
@@ -259,6 +264,9 @@ func bytesHasKey(body []byte, key string) bool {
 // mastodonPost maps one status to a socialPost.
 func mastodonPost(status *mastodonStatus) socialPost {
 	post := socialPost{id: status.ID, posted: githubPosted(status.CreatedAt), author: unknownAuthor, link: status.URI}
+	if readFromHome(status) {
+		_, post.shown, _ = mastodonHome(status.URI)
+	}
 	if status.InReplyToID != nil {
 		post.parent = *status.InReplyToID
 	}
@@ -312,7 +320,7 @@ func extractMastodonStatus(doc *html.Node, page *url.URL) (siteExtraction, bool)
 		statedUnknown: state.status.RepliesCount == nil,
 		notServed: "neither the instance's public context answers nor its replies collections held them " +
 			"(it serves an unauthenticated reader a bounded number of descendants per context, no reply that " +
-			"is not public, and a remote reply's own replies only as far as it knows them)",
+			"is not public, and a remote reply's own replies only as far as it and the reply's own instance know them)",
 	}
 	name := thread.post.author
 	if state.status.Account != nil && state.status.Account.DisplayName != "" {

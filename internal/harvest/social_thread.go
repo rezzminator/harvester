@@ -34,6 +34,9 @@ type socialPost struct {
 	// unavailable names why a reply the API lists is not readable ("" when it
 	// is): it is counted apart from the loaded replies.
 	unavailable string
+	// shown, when set, is the id a reader sees in id's place (a post the tree
+	// links by an address, read from another server under its own id).
+	shown string
 }
 
 // socialThread is one post's thread, ready to render.
@@ -173,7 +176,11 @@ func writeSocialPost(out *strings.Builder, post *socialPost, indent string) {
 		out.WriteString(indent + "- *a reply " + post.unavailable + "* · " + post.link + "\n")
 		return
 	}
-	out.WriteString(indent + "- **" + post.author + "** · " + post.posted + " · [" + post.id + "](" + post.link + ")\n")
+	shown := post.id
+	if post.shown != "" {
+		shown = post.shown
+	}
+	out.WriteString(indent + "- **" + post.author + "** · " + post.posted + " · [" + shown + "](" + post.link + ")\n")
 	if post.body != "" {
 		out.WriteString(prefixLines(post.body, indent+"  ", "") + "\n")
 	}
