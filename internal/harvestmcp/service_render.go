@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -14,15 +15,53 @@ import (
 )
 
 // ReadView is how a read answer renders its items: the MCP read tool's and
-// the harvester command's one rendering (RenderReadItem).
+// the harvester command's one rendering (RenderReadItems).
 type ReadView struct {
 	SizeOnly      bool // include_content:false: a size line stands in for the content
 	Remote        bool // the remote server: no item names a server path
 	InlineCap     int  // the most content characters one item shows; <= 0 is the default
+	Budget        int  // the most UTF-8 bytes the answer's text holds, every block together; <= 0 is the default
 	SearchEnabled bool // a web search backend is configured, so a failure may name search_web
 }
 
-// RenderReadItem is item's text block, n of total in its call:
+// defaultResultBytes is output.maxResultBytes's default, the budget of one
+// read answer: Claude Code saves a tool result over 50,000 characters to a
+// file, and a byte count bounds a character count.
+const defaultResultBytes = 50000
+
+// metaMaxResultSizeChars is the tools/list _meta key whose value Claude Code
+// takes as a tool's result limit in characters, up to 500,000.
+const metaMaxResultSizeChars = "anthropic/maxResultSizeChars"
+
+// budget is the view's answer budget in bytes.
+func (view ReadView) budget() int {
+	if view.Budget > 0 {
+		return view.Budget
+	}
+	return defaultResultBytes
+}
+
+// ReadPage is the part of an item's content a read answer shows.
+type ReadPage struct {
+	Content    string // the content shown
+	Start, End int    // the characters of the item's content shown, [Start, End)
+	Cut        bool   // the content goes on past End, the offset that continues it
+	Withheld   bool   // the budget's floor: the item shows its size and no content
+}
+
+// readItem is one item of a read answer before the budget sets its page.
+type readItem struct {
+	lines   []string // header, path and status lines
+	failed  bool
+	paged   bool   // the item shows content: it neither failed nor is a size probe
+	content string // the content it may show: its inline content within the view's character cap
+	start   int    // the character of the item's content that content starts at (read's offset)
+	total   int    // the characters of the item's whole content
+	path    bool   // the item names its artifact's path
+}
+
+// RenderReadItem is item's text block, n of total in its call, rendered
+// alone under view's budget:
 //
 //	=== [n/N] {item as passed}
 //	{absolute artifact path}
@@ -32,6 +71,27 @@ type ReadView struct {
 // It reports whether the item failed. An item that failed with no artifact
 // is its header and its error line alone.
 func RenderReadItem(n, total int, item string, result harvest.Result, view ReadView) (string, bool) {
+	items := []readItem{newReadItem(n, total, item, result, view)}
+	blocks, _ := renderReadItems(items, view.budget(), 0)
+	return blocks[0], items[0].failed
+}
+
+// RenderReadItems is a read answer's blocks, one per source in input order,
+// within view's budget together (renderReadItems), with whether each failed
+// and the page of content each shows.
+func RenderReadItems(sources []string, results []harvest.Result, view ReadView) ([]string, []bool, []ReadPage) {
+	items := make([]readItem, len(sources))
+	failed := make([]bool, len(sources))
+	for index, source := range sources {
+		items[index] = newReadItem(index+1, len(sources), source, results[index], view)
+		failed[index] = items[index].failed
+	}
+	blocks, pages := renderReadItems(items, view.budget(), 0)
+	return blocks, failed, pages
+}
+
+// newReadItem is item's lines up to its content and the content it may show.
+func newReadItem(n, total int, item string, result harvest.Result, view ReadView) readItem {
 	label := harvest.PublicSourceLabel(item)
 	lines := []string{itemHeader(n, total, item)}
 	path := result.Path
@@ -42,7 +102,7 @@ func RenderReadItem(n, total int, item string, result harvest.Result, view ReadV
 		if result.Error == "" && path != "" {
 			lines = append(lines, path)
 		}
-		return strings.Join(append(lines, "error: "+message), "\n"), true
+		return readItem{lines: append(lines, "error: "+message), failed: true}
 	}
 	if path != "" {
 		lines = append(lines, path)
@@ -51,18 +111,163 @@ func RenderReadItem(n, total int, item string, result harvest.Result, view ReadV
 		lines = append(lines, "partial: "+strings.Join(harvest.PublicGaps(result.Partial), "; "))
 	}
 	if view.SizeOnly {
-		lines = append(lines, fmt.Sprintf("size: %d chars", result.Chars))
-		return strings.Join(lines, "\n"), false
+		return readItem{lines: append(lines, sizeLine(result.Chars))}
 	}
-	content, cut := viewContent(result, view)
-	if shown := len([]rune(strings.TrimSpace(content))); cut && shown < result.Chars {
-		truncated := fmt.Sprintf("truncated: %d of %d chars", shown, result.Chars)
-		if path != "" {
-			truncated += ", full text at the path"
+	content, _ := viewContent(result, view)
+	return readItem{
+		lines: lines, paged: true, content: content, start: result.Offset, path: path != "",
+		total: max(result.Chars, result.Offset+utf8.RuneCountInString(strings.TrimRight(content, trailingSpace))),
+	}
+}
+
+// fixedReadItem is an item whose block is text alone: a failure the read
+// call words itself (a misplaced source).
+func fixedReadItem(text string) readItem {
+	return readItem{lines: []string{text}, failed: true}
+}
+
+const trailingSpace = " \t\r\n"
+
+// page is the item's content cut to at most limit bytes on a character
+// boundary, its trailing space left to the next page; limit < 0 is no cut.
+func (item readItem) page(limit int) ReadPage {
+	text := item.content
+	if limit >= 0 && limit < len(text) {
+		for limit > 0 && !utf8.RuneStart(text[limit]) {
+			limit--
 		}
-		lines = append(lines, truncated)
+		text = text[:limit]
 	}
-	return strings.Join(append(lines, strings.TrimRight(content, " \t\r\n")), "\n"), false
+	if trimmed := strings.TrimRight(text, trailingSpace); trimmed != "" || len(text) == len(item.content) {
+		text = trimmed
+	}
+	end := item.start + utf8.RuneCountInString(text)
+	return ReadPage{Content: text, Start: item.start, End: end, Cut: end < item.total}
+}
+
+// cost is the bytes page adds to the item's lines: its content and, when it
+// is cut, its truncated line.
+func (item readItem) cost(page ReadPage) int {
+	if !page.Cut {
+		return len(page.Content)
+	}
+	return len(page.Content) + 1 + len(item.truncated(page))
+}
+
+// lineReserve is the most bytes the item's truncated line can take.
+func (item readItem) lineReserve() int {
+	return 1 + len(item.truncated(ReadPage{Start: item.total, End: item.total}))
+}
+
+// truncated is the status line of a cut page: the range shown, the total,
+// the offset that continues it and, locally, the path.
+func (item readItem) truncated(page ReadPage) string {
+	line := fmt.Sprintf("truncated: chars %d-%d of %d shown; read this item alone with offset %d to continue",
+		page.Start, page.End, item.total, page.End)
+	if item.path {
+		line += ", or read the full text at the path"
+	}
+	return line
+}
+
+// render is the item's block showing page.
+func (item readItem) render(page ReadPage) string {
+	lines := item.lines
+	switch {
+	case !item.paged:
+	case page.Withheld:
+		lines = append(slices.Clone(lines),
+			sizeLine(item.total)+", content withheld: the item headers alone fill this answer's budget; read fewer items per call")
+	case page.Cut:
+		lines = append(slices.Clone(lines), item.truncated(page), page.Content)
+	default:
+		lines = append(slices.Clone(lines), page.Content)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func sizeLine(chars int) string { return fmt.Sprintf("size: %d chars", chars) }
+
+// renderReadItems renders items so their blocks, joined by a blank line,
+// hold at most budget bytes less reserve (the bytes of what follows them):
+// every item whole when they fit; else each item's content gets an equal
+// share of what the lines leave, an item shorter than its share giving the
+// rest back to the longer ones (max-min fair, request order), each cut item
+// naming its range and the offset that continues it. When the lines alone
+// leave no content (many items), every item shows its size and no content:
+// the one answer that may pass the budget.
+func renderReadItems(items []readItem, budget, reserve int) ([]string, []ReadPage) {
+	pages := make([]ReadPage, len(items))
+	var paged []int
+	for index, item := range items {
+		if item.paged {
+			pages[index] = item.page(-1)
+			paged = append(paged, index)
+		}
+	}
+	if answerBytes(items, pages)+reserve <= budget {
+		return renderPages(items, pages), pages
+	}
+	room := budget - reserve - 2*(len(items)-1)
+	for _, item := range items {
+		room -= len(strings.Join(item.lines, "\n"))
+		if item.paged {
+			room-- // the line break before the content
+		}
+	}
+	order := slices.Clone(paged)
+	slices.SortStableFunc(order, func(a, b int) int {
+		return items[a].cost(pages[a]) - items[b].cost(pages[b])
+	})
+	floor := room <= 0
+	for rank, index := range order {
+		if floor {
+			break
+		}
+		left := len(order) - rank
+		share := room / left
+		if cost := items[index].cost(pages[index]); cost <= share {
+			room -= cost
+			continue
+		}
+		cut := slices.Clone(order[rank:])
+		slices.Sort(cut) // the bytes integer division leaves go first to the earliest
+		extra := room - share*left
+		for position, cutIndex := range cut {
+			bytes := share - items[cutIndex].lineReserve()
+			if position < extra {
+				bytes++
+			}
+			pages[cutIndex] = items[cutIndex].page(max(bytes, 0))
+			floor = floor || pages[cutIndex].End == pages[cutIndex].Start
+		}
+		break
+	}
+	if floor || answerBytes(items, pages)+reserve > budget {
+		for _, index := range paged {
+			start := items[index].start
+			pages[index] = ReadPage{Start: start, End: start, Cut: true, Withheld: true}
+		}
+	}
+	return renderPages(items, pages), pages
+}
+
+// renderPages is each item's block showing its page.
+func renderPages(items []readItem, pages []ReadPage) []string {
+	blocks := make([]string, len(items))
+	for index, item := range items {
+		blocks[index] = item.render(pages[index])
+	}
+	return blocks
+}
+
+// answerBytes is the bytes of items' blocks joined by blank lines.
+func answerBytes(items []readItem, pages []ReadPage) int {
+	total := 2 * max(len(items)-1, 0)
+	for index, item := range items {
+		total += len(item.render(pages[index]))
+	}
+	return total
 }
 
 // viewContent is the content an item shows inline: its stored content cut
@@ -155,6 +360,7 @@ func (service *Service) readView(sizeOnly bool) ReadView {
 		SizeOnly:      sizeOnly,
 		Remote:        service.runtime.Remote,
 		InlineCap:     service.inlineCap(),
+		Budget:        service.resultBudget(),
 		SearchEnabled: runtimeSearchEnabled(service.runtime),
 	}
 }
@@ -166,6 +372,15 @@ func (service *Service) inlineCap() int {
 		return service.runtime.MaxInlineChars
 	}
 	return defaultInlineChars
+}
+
+// resultBudget is output.maxResultBytes from harvester.config.json, the
+// bytes one read answer holds; an unconfigured runtime keeps the default.
+func (service *Service) resultBudget() int {
+	if service != nil && service.runtime.MaxResultBytes > 0 {
+		return service.runtime.MaxResultBytes
+	}
+	return defaultResultBytes
 }
 
 // textResult is a tool answer of one text: an error result when isError.

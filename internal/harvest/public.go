@@ -68,16 +68,19 @@ func (h *Harvester) FetchPublic(ctx context.Context, source string, options Fetc
 		options.Field,
 		note.apply(h.FetchWithOptions(ctx, resolved, options)),
 		options.SizeOnly,
+		options.Offset,
 	)
 }
 
 // PublicResult publishes a core result without exposing a provider (the
 // method is its rung class, PublicMethod), rung traces, cache metadata, or private filesystem paths.
 func (h *Harvester) PublicResult(source string, result Result, sizeOnly bool) Result {
-	return h.exportResult(source, "", result, sizeOnly)
+	return h.exportResult(source, "", result, sizeOnly, 0)
 }
 
-func (h *Harvester) exportResult(source, field string, result Result, sizeOnly bool) Result {
+// exportResult publishes result; its inline content starts at the item's
+// offset-th character (FetchOptions.Offset).
+func (h *Harvester) exportResult(source, field string, result Result, sizeOnly bool, offset int) Result {
 	if result.Error != "" {
 		log.Printf(
 			"harvest: public result failure for %q: kind=%q status=%d challenge=%t error=%v",
@@ -210,7 +213,11 @@ func (h *Harvester) exportResult(source, field string, result Result, sizeOnly b
 
 	out.Chars = contentChars(body)
 	out.ContentChars = out.Chars
-	out.Content = truncateInline(body, h.options.MaxInlineChars)
+	if offset > 0 && offset >= out.Chars {
+		return offsetPastEnd(source, offset, out.Chars)
+	}
+	out.Offset = offset
+	out.Content = pageInline(body, offset, h.options.MaxInlineChars)
 	if sizeOnly {
 		out.Content = ""
 	}
@@ -223,6 +230,19 @@ func (h *Harvester) exportResult(source, field string, result Result, sizeOnly b
 	}
 	out.Bytes = info.Size()
 	return out
+}
+
+// offsetPastEnd is the failure of a read whose offset is at or past the end
+// of its item's chars characters of content: it names the total.
+func offsetPastEnd(source string, offset, chars int) Result {
+	message := fmt.Sprintf("offset %d is at or past the end of this item: its content is %d chars", offset, chars)
+	if chars > 0 {
+		message += fmt.Sprintf(", so offset takes 0 to %d", chars-1)
+	}
+	return Result{
+		Source: PublicSourceLabel(source), Error: message + ".", ErrorKind: errorKindInvalid, Chars: chars,
+		ContentChars: chars, published: true,
+	}
 }
 
 func (h *Harvester) publicArchiveDisplay(source string) string {
@@ -639,6 +659,9 @@ type JSONResult struct {
 	Gaps              []string `json:"gaps"`
 	Cached            bool     `json:"cached"`
 	Status            int      `json:"status,omitempty"`
+	// NextOffset is the offset that continues a result whose content the
+	// read answer cut (harvestmcp.RenderReadItems); nil when it is whole.
+	NextOffset *int `json:"next_offset,omitempty"`
 }
 
 // JSONResults renders results for `harvester --json`.

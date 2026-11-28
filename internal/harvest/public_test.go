@@ -312,7 +312,7 @@ func TestBothStoresWriteTheirFrontmatterAndBodiesCarryNone(t *testing.T) {
 		t.Errorf("private fetched_at %q body %q, want a stamp and the bare body", private["fetched_at"], privateBody)
 	}
 
-	public := h.exportResult(source, "urls", stored, false)
+	public := h.exportResult(source, "urls", stored, false, 0)
 	if public.Error != "" {
 		t.Fatalf("exportResult error = %q", public.Error)
 	}
@@ -401,7 +401,7 @@ func TestLegacyArtifactsReadWithTheirBannerAndMetadataLifted(t *testing.T) {
 			result.Content,
 		)
 	}
-	public := h.exportResult(source, "urls", result, false)
+	public := h.exportResult(source, "urls", result, false, 0)
 	if public.Error != "" {
 		t.Fatalf("exportResult error = %q", public.Error)
 	}

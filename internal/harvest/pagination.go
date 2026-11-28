@@ -15,8 +15,8 @@ import (
 // a paginated thread, article or listing: <link rel="next"> in its head, or an
 // <a rel="next"> — advertises content its artifact does not hold. The generic
 // path converts the one page it fetched; a site extractor that knows the
-// pagination follows it (discourse.go). Every other page's continuation is
-// named on the artifact as a partial reason, never dropped silently. Only a
+// pagination follows it (discourse.go, forum_topic.go). Every other page's
+// continuation is named on the artifact as a partial reason, never dropped silently. Only a
 // link continuing the page's OWN address counts: the same path with another
 // value of a pagination key (?page=2, &start=20); the page's path with a page
 // segment (/2/, /page/2/, /page-2); or, for a page naming its own page

@@ -67,11 +67,11 @@ func printHarvesterExternalDoctor(ctx context.Context, stdout io.Writer, setting
 	address := net.JoinHostPort(host, strconv.Itoa(settings.External.Port))
 	conn, err := externalDial(ctx, "tcp", address)
 	if err != nil {
-		fmt.Fprintf(stdout, "doctor: mcp harvester_external=not listening address=%s error=%v\n", address, err)
+		fmt.Fprintf(stdout, "doctor: mcp harvester_external=not listening address=%s error=%v hint=run harvester setup; it configures the gateway service\n", address, err)
 		return 1
 	}
 	if err := conn.Close(); err != nil {
-		fmt.Fprintf(stdout, "doctor: mcp harvester_external=probe failed address=%s error=%v\n", address, err)
+		fmt.Fprintf(stdout, "doctor: mcp harvester_external=probe failed address=%s error=%v hint=run harvester setup; it configures the gateway service\n", address, err)
 		return 1
 	}
 	fmt.Fprintf(stdout, "doctor: mcp harvester_external=listening address=%s\n", address)

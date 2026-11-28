@@ -19,6 +19,7 @@ import (
 	"github.com/rezzminator/harvester/internal/harvestpy"
 	"github.com/rezzminator/harvester/internal/obs"
 	"github.com/rezzminator/harvester/internal/paths"
+	"github.com/rezzminator/harvester/internal/searxng"
 )
 
 type operations struct {
@@ -26,7 +27,9 @@ type operations struct {
 	provision func(context.Context, harvestpy.ProvisionOptions) (harvestpy.ProvisionResult, error)
 	models    func(context.Context, harvestpy.OCRStageOptions) (harvestpy.OCRStaging, error)
 	service   func(context.Context, config.Runtime) error
-	ensure    func(context.Context, config.Runtime) error
+	// search ensures the managed web-search backend; offline never pulls.
+	search func(context.Context, config.Runtime, bool) searxng.Result
+	ensure func(context.Context, config.Runtime) error
 }
 
 func Run(ctx context.Context, runtime config.Runtime, offline bool, stdout, stderr io.Writer) int {
@@ -37,6 +40,13 @@ func Run(ctx context.Context, runtime config.Runtime, offline bool, stdout, stde
 		models:    harvestpy.StageOCRModels,
 		service: func(ctx context.Context, cfg config.Runtime) error {
 			return configureService(ctx, cfg, runner, platformOS())
+		},
+		search: func(ctx context.Context, cfg config.Runtime, offline bool) searxng.Result {
+			manager, err := searxng.NewManager(cfg.Paths.Home, offline)
+			if err != nil {
+				return searxng.Result{State: searxng.StateFailed, Detail: err.Error()}
+			}
+			return manager.Ensure(ctx)
 		},
 		ensure: func(ctx context.Context, cfg config.Runtime) error {
 			if cfg.Config.Harvester.External.Enabled {
@@ -134,6 +144,7 @@ func run(ctx context.Context, cfg config.Runtime, offline bool, stdout io.Writer
 	if !report.Healthy {
 		return fmt.Errorf("new conversion environment is not healthy")
 	}
+	searchStage(ctx, cfg, offline, stdout, ops.search)
 	if cfg.Config.Harvester.External.Enabled {
 		if err := ops.service(ctx, cfg); err != nil {
 			return fmt.Errorf("gateway service: %w", err)
@@ -144,6 +155,31 @@ func run(ctx context.Context, cfg config.Runtime, offline bool, stdout io.Writer
 	}
 	fmt.Fprintln(stdout, "setup: conversion healthy; gateway service configured; daemon ready")
 	return nil
+}
+
+// searchStage readies web search before the daemon refresh, so the refreshed
+// daemon lists search_web. Search is optional and conversion is not: whatever
+// happens here is a row, and setup's exit code stays what conversion made it.
+func searchStage(ctx context.Context, cfg config.Runtime, offline bool, stdout io.Writer, ensure func(context.Context, config.Runtime, bool) searxng.Result) {
+	search := cfg.Config.Harvester.Search
+	if !searxng.Wanted(search) {
+		backend := searxng.Resolve(cfg.Paths.Home, search)
+		detail := ""
+		if backend.Detail != "" {
+			detail = " (" + backend.Detail + ")"
+		}
+		fmt.Fprintf(stdout, "setup: search backend=%s%s; nothing provisioned\n", backend.Source, detail)
+		return
+	}
+	result := ensure(ctx, cfg, offline)
+	switch result.State {
+	case searxng.StateReady:
+		fmt.Fprintf(stdout, "setup: search %s\n", result.Summary())
+	case searxng.StateNoDocker:
+		fmt.Fprintf(stdout, "setup: search unavailable: %s; %s\n", result.Detail, searxng.Hint)
+	default:
+		fmt.Fprintf(stdout, "setup: search not ready: %s; %s\n", result.Detail, searxng.FailedHint)
+	}
 }
 
 func directory(path string) (bool, error) {

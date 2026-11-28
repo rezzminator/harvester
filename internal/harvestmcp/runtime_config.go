@@ -1,18 +1,22 @@
 package harvestmcp
 
-import "github.com/rezzminator/harvester/internal/config"
+import (
+	"github.com/rezzminator/harvester/internal/config"
+	"github.com/rezzminator/harvester/internal/searxng"
+)
 
 // RuntimeFromConfig is harvester.config.json resolved into the MCP adapter's
 // runtime — the ONE bridge between machine config and the harvester. Local
 // callers (CLI, stdio, loopback daemon) keep the unconfined local-read surface
 // subject to harvest.DenyLocalPath; the external gateway confines to exported artifacts.
+// Its SearXNG origin is the operator's, else a ready managed backend's (searxng.Origin).
 func RuntimeFromConfig(home string, harvester config.HarvesterConfig) Runtime {
 	return Runtime{
 		Home:                  home,
 		CacheDir:              harvester.Cache.Dir,
 		UserAgent:             harvester.Fetch.UserAgent,
 		ProxyURL:              harvester.Fetch.ProxyURL,
-		SearXNGURL:            harvester.Search.SearXNGURL,
+		SearXNGURL:            searxng.Origin(home, harvester.Search),
 		BraveAPIKey:           harvester.Search.BraveAPIKey,
 		DisableSearch:         !harvester.Search.Enabled,
 		ContactEmail:          harvester.Scholarly.ContactEmail,
@@ -35,6 +39,7 @@ func RuntimeFromConfig(home string, harvester config.HarvesterConfig) Runtime {
 		NegativeTransientTTL:  harvester.Cache.NegativeTransientTTL,
 		TTLsConfigured:        true,
 		MaxInlineChars:        harvester.Output.MaxInlineChars,
+		MaxResultBytes:        harvester.Output.MaxResultBytes,
 		MaxDownloadBytes:      harvester.Harvest.MaxDownloadBytes,
 		MaxResourceBytes:      harvester.Harvest.MaxResourceBytes,
 	}

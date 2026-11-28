@@ -26,6 +26,7 @@ const (
 	fieldURLs         = "urls"
 	fieldFiles        = "files"
 	fieldPublications = "publications"
+	fieldOffset       = "offset"
 
 	// The ask fields (read_ask.go): a local engine answers them, so the
 	// remote gateway's schema leaves them out.
@@ -35,7 +36,7 @@ const (
 
 	readDescriptionTail = `1–50 items, at most 20 publications. A title goes to search_literature first; a file wanted as bytes to download_file. Returns one text block per item, input order: ` +
 		"`=== [n/N] {item}`" + `, `
-	readDescriptionEnd = `a partial: or truncated: line when incomplete, then the content. A failed item is its header and an error: line; all failed = an error result.`
+	readDescriptionEnd = `a partial: line when incomplete, then the content. The answer keeps within a byte budget: a cut item's truncated: line names the chars shown, the total and the offset that continues it; read that item alone with offset to page on. A failed item is its header and an error: line; all failed = an error result.`
 
 	readDescription = `Reads pages, files and papers — web pages, local documents and scholarly works, as Markdown. ` +
 		`Call read{urls:["https://…"], files:["/path/to/file.pdf"], publications:["10.1038/nature14539"]}: ` +
@@ -57,6 +58,7 @@ type ReadInput struct {
 	Ask            string            `json:"ask,omitempty" jsonschema:"Optional question, answered once over every item read, after the item blocks; the items then show their size, not their content, unless include_content is true."`
 	Engine         string            `json:"engine,omitempty" jsonschema:"With ask: the engine that answers it, claude (default) or codex."`
 	Model          string            `json:"model,omitempty" jsonschema:"With ask: the model that answers it, an alias (haiku, sonnet, opus, fable) or a model id; default haiku on claude, the configured ask model on codex."`
+	Offset         int               `json:"offset,omitempty" jsonschema:"Characters of the item's content to skip, read from its cached artifact: the offset a truncated: line names continues that item. Exactly one item per call with offset; refresh still reads it again."`
 	Headers        map[string]string `json:"headers,omitempty" jsonschema:"Optional request headers (name → value) sent only to a url's own origin and a publication's landing origin, never with files; reader services, archives and resolver APIs never receive them. At most 32 headers, 8 KiB; no Host, Content-Length, Transfer-Encoding, Connection, Upgrade, TE, Trailer, Keep-Alive or Proxy-*. A caller header overrides the default of its name."`
 }
 
@@ -87,8 +89,10 @@ func readSchema(remote bool) *jsonschema.Schema {
 			delete(schema.Properties, field)
 		}
 		schema.AdditionalProperties = nil
+		schema.Properties[fieldOffset].Minimum = jsonschema.Ptr(0.0)
 		return schema
 	}
+	schema.Properties[fieldOffset].Minimum = jsonschema.Ptr(0.0)
 	files := schema.Properties[fieldFiles]
 	files.Description += " Formats: " + harvest.ReadableFormats + "."
 	return schema
@@ -112,6 +116,14 @@ func (service *Service) read(
 	case len(input.Publications) > maxPublications:
 		return readError(fmt.Errorf("publications takes at most %d items; this call sent %d",
 			maxPublications, len(input.Publications))), nil, nil
+	}
+	switch {
+	case input.Offset < 0:
+		return readError(fmt.Errorf("offset must be 0 or more; this call sent %d", input.Offset)), nil, nil
+	case input.Offset > 0 && total > 1:
+		return readError(fmt.Errorf(
+			"offset takes exactly one item: it pages one item's content; this call sent %d items, so read them "+
+				"without offset or one at a time", total)), nil, nil
 	}
 	ocrLang, err := harvest.ParseOCRLang(input.OCRLanguage)
 	if err != nil {
@@ -140,15 +152,18 @@ func (service *Service) read(
 		question != nil && input.IncludeContent == nil
 	return service.readMany(ctx, jobs, readRequest{
 		headers: headers,
-		options: harvest.FetchOptions{Refresh: input.Refresh, SizeOnly: sizeOnly, OCRLang: ocrLang},
-		ask:     question,
+		options: harvest.FetchOptions{
+			Refresh: input.Refresh, SizeOnly: sizeOnly, OCRLang: ocrLang, Offset: input.Offset,
+		},
+		ask: question,
 	}), nil, nil
 }
 
 // readMany fans every job out at once (8 at a time, per-item isolation in
 // fetchOne) and answers one text: a block per item in input order (urls,
 // files, publications), each headed by the source as the caller passed it,
-// then the answer block when the call asks a question. Every item failed, or
+// then the answer block when the call asks a question, all within the view's
+// budget (renderReadItems; the answer block is never cut). Every item failed, or
 // the question went unanswered: the call is an error, so a failed batch never
 // reads as a result; one item that read keeps the batch a result.
 func (service *Service) readMany(ctx context.Context, jobs []readJob, request readRequest) *mcp.CallToolResult {
@@ -169,25 +184,31 @@ func (service *Service) readMany(ctx context.Context, jobs []readJob, request re
 	}
 	wait.Wait()
 	view := service.readView(request.options.SizeOnly)
-	blocks := make([]string, len(jobs))
+	items := make([]readItem, len(jobs))
 	failedItems := make([]bool, len(jobs))
 	sources := make([]string, len(jobs))
 	isError := true
 	for index, job := range jobs {
-		block, failed := RenderReadItem(index+1, len(jobs), job.source, results[index], view)
+		item := newReadItem(index+1, len(jobs), job.source, results[index], view)
 		if misplacedBy[index] != "" {
-			block, failed = failedItem(index+1, len(jobs), job.source, misplacedBy[index]), true
+			item = fixedReadItem(failedItem(index+1, len(jobs), job.source, misplacedBy[index]))
 			results[index] = harvest.Result{Source: job.source, Error: misplacedBy[index], ErrorKind: "invalid"}
-		} else if failed && results[index].Error == "" { // a thin or empty page: its receipt names why
+		} else if item.failed && results[index].Error == "" { // a thin or empty page: its receipt names why
 			results[index].Error = itemFailure(harvest.PublicSourceLabel(job.source), results[index], view)
 		}
-		blocks[index], failedItems[index], sources[index] = block, failed, job.source
-		isError = isError && failed
+		items[index], failedItems[index], sources[index] = item, item.failed, job.source
+		isError = isError && item.failed
 	}
+	answer, reserve := "", 0
 	if request.ask != nil {
-		answer, failed := service.answerBlock(ctx, request.ask, sources, results, failedItems)
-		blocks = append(blocks, answer)
+		var failed bool
+		answer, failed = service.answerBlock(ctx, request.ask, sources, results, failedItems)
+		reserve = len("\n\n" + answer)
 		isError = isError || failed
+	}
+	blocks, _ := renderReadItems(items, view.budget(), reserve)
+	if request.ask != nil {
+		blocks = append(blocks, answer)
 	}
 	return textResult(strings.Join(blocks, "\n\n"), isError)
 }

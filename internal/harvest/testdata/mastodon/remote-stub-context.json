@@ -1,0 +1,53 @@
+{
+ "ancestors": [],
+ "descendants": [
+  {
+   "id": "117117500000000001",
+   "created_at": "2026-08-18T17:00:00.000Z",
+   "in_reply_to_id": "117117243837071506",
+   "sensitive": false,
+   "spoiler_text": "",
+   "visibility": "public",
+   "language": "en",
+   "replies_count": 1,
+   "reblogs_count": 0,
+   "favourites_count": 0,
+   "edited_at": null,
+   "media_attachments": [],
+   "uri": "https://remote.example/@user-20/117117500000000001",
+   "url": "https://remote.example/@user-20/117117500000000001",
+   "content": "<p>A reply the host holds only as its parent's count.</p>",
+   "account": {
+    "id": "2020",
+    "username": "user-20",
+    "acct": "user-20",
+    "display_name": "User 20",
+    "url": "https://remote.example/@user-20"
+   }
+  },
+  {
+   "id": "117117500000000002",
+   "created_at": "2026-08-18T17:05:00.000Z",
+   "in_reply_to_id": "117117500000000001",
+   "sensitive": false,
+   "spoiler_text": "",
+   "visibility": "public",
+   "language": "en",
+   "replies_count": 0,
+   "reblogs_count": 0,
+   "favourites_count": 0,
+   "edited_at": null,
+   "media_attachments": [],
+   "uri": "https://third.example/@user-21/113000000000000001",
+   "url": "https://third.example/@user-21/113000000000000001",
+   "content": "<p>A reply from a third server.</p>",
+   "account": {
+    "id": "2021",
+    "username": "user-21",
+    "acct": "user-21@third.example",
+    "display_name": "User 21",
+    "url": "https://third.example/@user-21"
+   }
+  }
+ ]
+}

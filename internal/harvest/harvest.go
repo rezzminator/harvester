@@ -334,6 +334,7 @@ func (h *Harvester) fetchURLWithPolicy(
 				}
 			}
 		}
+		loaders.client, loaders.ua = rung.client, rung.ua
 		converted, page, err := h.convertFetchedDocument(withBaseURL(ctx, gaps.final), kind, source, body, loaders)
 		gaps = page.carry(gaps)
 		if err != nil {
@@ -482,6 +483,9 @@ func (h *Harvester) fetchURLWithPolicy(
 					lastChallenge = true
 					log.Printf("harvest: browser rung hit a challenge wall for %s (HTTP %d)", logSource(source), status)
 				} else {
+					// A page only a real browser delivered: its later pages go
+					// out on the Chrome impersonation, the nearest wire surface.
+					loaders.client, loaders.ua = chromeClient, chromeUA
 					converted, page, convErr := h.convertFetchedDocument(
 						withBaseURL(ctx, outcome.finalURL), kindHTML, source, []byte(html), loaders,
 					)

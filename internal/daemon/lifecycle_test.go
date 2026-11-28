@@ -264,9 +264,31 @@ func TestEnsureStartFailureAnswersMCPWithLogPath(t *testing.T) {
 	}
 	proxy := newStdioProxy(t.Context(), "unused", io.Discard)
 	proxy.ensure = func(ctx context.Context) error {
-		bounded, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+		// The proxy gives up once the failed daemon has written its failure to
+		// the log, never at a fixed time a loaded host can miss; the bound only
+		// ends a start that never writes it.
+		bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
+		watched := make(chan struct{})
+		go func() {
+			defer close(watched)
+			ticker := time.NewTicker(5 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				if body, err := os.ReadFile(paths.DaemonLog(runtime.Paths.Home)); err == nil && strings.Contains(string(body), "fixture startup failed") {
+					cancel()
+					return
+				}
+				select {
+				case <-bounded.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
 		_, err := Ensure(bounded, runtime)
+		cancel()
+		<-watched
 		return err
 	}
 	harness := startProxyTestHarness(t, proxy)

@@ -90,6 +90,9 @@ type Runtime struct {
 	NegativeTransientTTL time.Duration
 	TTLsConfigured       bool
 	MaxInlineChars       int
+	// MaxResultBytes is output.maxResultBytes, the bytes one read answer
+	// holds; 0 is the default (defaultResultBytes).
+	MaxResultBytes int
 	// Remote marks the external gateway's service: read takes no `files` there
 	// (its schema drops the field), no result carries a server path, and download_file answers a signed
 	// expiring /files URL plus a resource_link served by the download
@@ -530,6 +533,9 @@ func (service *Service) RegisterTools(server *mcp.Server) {
 	if service.runtime.Remote {
 		readTool.Description = readRemoteDescription
 	}
+	// Claude Code keeps a result up to this many characters inline, in place
+	// of its own limits; the answer's bytes, within this budget, bound them.
+	readTool.Meta = mcp.Meta{metaMaxResultSizeChars: service.resultBudget()}
 	mcp.AddTool(server, readTool, obs.Tool(toolRead, untilClientGone(service.read)))
 	mcp.AddTool(server,
 		&mcp.Tool{Name: toolDownloadFile, Description: downloadFileDescription, Annotations: readOnly},

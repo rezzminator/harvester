@@ -74,6 +74,15 @@ func TestReadAskAnswersOverTheItems(t *testing.T) {
 			wantArgs: "--model|haiku|",
 		},
 		{
+			// The answer is never cut and its bytes come off the items' budget
+			// first: one that fills the budget leaves the content withheld.
+			name:     "include content beside an answer that fills the budget",
+			args:     map[string]any{"urls": []string{askFixturePage}, "ask": "What does the page say?", "include_content": true},
+			engine:   "printf '%s\\n' '{\"result\":\"" + strings.Repeat("a", 50000) + "\"}'\n",
+			want:     "=== [1/1] " + askFixturePage + "\n{path}\n{size}, content withheld: the item headers alone fill this answer's budget; read fewer items per call\n\n=== answer (claude haiku)\n" + strings.Repeat("a", 50000),
+			wantArgs: "--model|haiku|",
+		},
+		{
 			name: "every item failed", args: map[string]any{"urls": []string{"10.1234/ask"}, "ask": "What?"},
 			engine:  reply,
 			want:    "=== [1/1] 10.1234/ask\nerror: this is a DOI; put it in publications.\n\n=== answer (claude haiku)\nerror: not asked: no item was read",

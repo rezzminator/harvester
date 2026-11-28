@@ -22,7 +22,7 @@ const (
 	searchVerb       = "search"
 	jsonFlag         = "json"
 	maxSources       = 50
-	readUsage        = "usage: harvester [--refresh] [--include-content=false] [--ocr-language latin|zh|ja|ar|ru|he] [--json] [--header 'Name: value']... <url|path|identifier>...\n" +
+	readUsage        = "usage: harvester [--refresh] [--include-content=false] [--offset N] [--ocr-language latin|zh|ja|ar|ru|he] [--json] [--header 'Name: value']... <url|path|identifier>...\n" +
 		"       harvester download-file [--json] [--header 'Name: value']... <url>...\n" +
 		"       harvester search [--type any|paper|book] [--limit N] [--json] <query>...\n" +
 		"       harvester ask -p <prompt> [--engine claude|codex] [--model MODEL] [--effort EFFORT] [--refresh] <url|path|identifier>..."
@@ -81,6 +81,11 @@ func runRead(args []string, stdout, stderr io.Writer, runtime config.Runtime) in
 		"",
 		"script to OCR a scanned document in (latin, zh, ja, ar, ru, he); a fresh read",
 	)
+	offset := flags.Int(
+		"offset",
+		0,
+		"characters of the one source's content to skip: the offset a truncated: line names continues it",
+	)
 	jsonOutput := flags.Bool(jsonFlag, false, "print machine-readable result objects")
 	headers := harvest.HeaderFlag(flags)
 	sources, code, ok := cli.ParseFlagsAnywhere(flags, args)
@@ -89,6 +94,15 @@ func runRead(args []string, stdout, stderr io.Writer, runtime config.Runtime) in
 	}
 	if len(sources) == 0 || len(sources) > maxSources {
 		flags.Usage()
+		return 2
+	}
+	switch {
+	case *offset < 0:
+		fmt.Fprintf(stderr, "harvester: --offset must be 0 or more, got %d\n", *offset)
+		return 2
+	case *offset > 0 && len(sources) > 1:
+		fmt.Fprintf(stderr, "harvester: --offset takes exactly one source: it pages one item's content; got %d\n",
+			len(sources))
 		return 2
 	}
 	ocrLanguage, err := harvest.ParseOCRLang(*ocrLanguageFlag)
@@ -101,28 +115,35 @@ func runRead(args []string, stdout, stderr io.Writer, runtime config.Runtime) in
 		fmt.Fprintf(stderr, "harvester: configure: %v\n", err)
 		return 1
 	}
-	view := harvestmcp.ReadView{SizeOnly: !*includeContent, InlineCap: harvesterRuntime(runtime).MaxInlineChars}
+	configured := harvesterRuntime(runtime)
+	view := harvestmcp.ReadView{
+		SizeOnly: !*includeContent, InlineCap: configured.MaxInlineChars, Budget: configured.MaxResultBytes,
+	}
 	results := make([]harvest.Result, 0, len(sources))
-	printedFailure := false // a block printed as an error line exits nonzero, whatever the result's Error
-	for index, source := range sources {
-		result := headers.Fetch(
+	for _, source := range sources {
+		results = append(results, headers.Fetch(
 			context.Background(),
 			harvester,
 			source,
-			harvest.FetchOptions{Refresh: *refresh, SizeOnly: !*includeContent, OCRLang: ocrLanguage},
-		)
-		results = append(results, result)
+			harvest.FetchOptions{
+				Refresh: *refresh, SizeOnly: !*includeContent, OCRLang: ocrLanguage, Offset: *offset,
+			},
+		))
+	}
+	// The read tool's one rendering: every block within the answer budget.
+	blocks, failed, pages := harvestmcp.RenderReadItems(sources, results, view)
+	printedFailure := false // a block printed as an error line exits nonzero, whatever the result's Error
+	for index, block := range blocks {
+		printedFailure = printedFailure || failed[index]
 		if !*jsonOutput {
 			if index > 0 {
 				fmt.Fprintln(stdout)
 			}
-			block, failed := harvestmcp.RenderReadItem(index+1, len(sources), source, result, view)
-			printedFailure = printedFailure || failed
 			fmt.Fprintln(stdout, block)
 		}
 	}
 	if *jsonOutput {
-		encoded, err := json.MarshalIndent(harvest.JSONResults(results), "", "  ")
+		encoded, err := json.MarshalIndent(jsonResults(results, failed, pages, view.SizeOnly), "", "  ")
 		if err != nil {
 			fmt.Fprintf(stderr, "harvester: encode results: %v\n", err)
 			return 1
@@ -139,4 +160,30 @@ func runRead(args []string, stdout, stderr io.Writer, runtime config.Runtime) in
 		}
 	}
 	return 0
+}
+
+// jsonResults is results for --json, each content the page its text block
+// shows: a cut page ends with harvest.InlineTruncationNote and names the
+// offset that continues it (next_offset); a withheld one has neither.
+func jsonResults(
+	results []harvest.Result, failed []bool, pages []harvestmcp.ReadPage, sizeOnly bool,
+) []harvest.JSONResult {
+	out := harvest.JSONResults(results)
+	for index := range out {
+		if failed[index] || sizeOnly {
+			continue
+		}
+		page := pages[index]
+		if !page.Cut { // whole: the content as read
+			continue
+		}
+		out[index].Content = ""
+		if page.Withheld { // no page shown, so no offset continues one
+			continue
+		}
+		next := page.End
+		out[index].NextOffset = &next
+		out[index].Content = page.Content + harvest.InlineTruncationNote
+	}
+	return out
 }

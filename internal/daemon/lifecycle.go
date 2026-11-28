@@ -21,6 +21,7 @@ import (
 	"github.com/rezzminator/harvester/internal/config"
 	"github.com/rezzminator/harvester/internal/obs"
 	"github.com/rezzminator/harvester/internal/paths"
+	"github.com/rezzminator/harvester/internal/searxng"
 	"golang.org/x/mod/semver"
 )
 
@@ -61,7 +62,11 @@ func identity(runtime config.Runtime) (string, error) {
 	body, err := json.Marshal(struct {
 		Config                     config.Config
 		Home, Python, State, Cache string
-	}{runtime.Config, runtime.Paths.Home, os.Getenv("HARVESTER_PYTHON_ROOT"), paths.StateRoot(runtime.Paths.Home), os.Getenv("XDG_CACHE_HOME")})
+		// Search is the SearXNG origin a new session searches: a managed backend
+		// turning ready, or gone, replaces a daemon built before it.
+		Search string
+	}{runtime.Config, runtime.Paths.Home, os.Getenv("HARVESTER_PYTHON_ROOT"), paths.StateRoot(runtime.Paths.Home), os.Getenv("XDG_CACHE_HOME"),
+		searxng.Origin(runtime.Paths.Home, runtime.Config.Harvester.Search)})
 	if err != nil {
 		return "", fmt.Errorf("encode effective daemon configuration: %w", err)
 	}

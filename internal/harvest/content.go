@@ -121,11 +121,11 @@ func readerPage(source, markdown string) convertedPage {
 // site renders is never stored as complete; one built from an API record
 // (siteAPI) closed it. The next page travels unless the stored content
 // provably followed it: a site extractor rendered it (an extractor that knows
-// its site's pagination follows it, discourse.go); with no next page named,
-// an address naming its own page whose pager no rung saw names its unread
-// later pages (pagedListing). page is the conversion
-// content came from (readerPage for a reader rung's markdown); a gap content
-// already names is not repeated. A wall the page or an earlier rung showed
+// its site's pagination follows it: discourse.go, forum_topic.go); with no
+// next page named, an address naming its own page whose pager no rung saw
+// names its unread later pages (pagedListing). page is the conversion content
+// came from (readerPage for a reader rung's markdown); a gap content already
+// names is not repeated. A wall the page or an earlier rung showed
 // is named unless an API record built the page (siteAPI). A permanent move of
 // the page (gaps.moved) is a note line under the partial marker
 // (movedNotePrefix) that flags nothing. No link keeps a session id

@@ -52,6 +52,9 @@ type HarvesterSearch struct {
 	// the search request (a private/loopback SearXNG is the normal deployment).
 	SearXNGURL  string
 	BraveAPIKey string
+	// Managed lets the harvester run its own SearXNG (internal/searxng) when
+	// neither SearXNGURL nor BraveAPIKey is set; false provisions nothing.
+	Managed bool
 }
 
 type HarvesterScholarly struct {
@@ -111,6 +114,9 @@ type HarvesterLimits struct {
 
 type HarvesterOutput struct {
 	MaxInlineChars int
+	// MaxResultBytes is output.maxResultBytes: the UTF-8 bytes one read
+	// answer holds, all its text blocks together.
+	MaxResultBytes int
 }
 
 type rawHarvester struct {
@@ -145,6 +151,7 @@ type rawHarvesterSearch struct {
 	Enabled     *bool   `json:"enabled,omitempty"`
 	SearXNGURL  *string `json:"searxngURL,omitempty"`
 	BraveAPIKey *string `json:"braveApiKey,omitempty"`
+	Managed     *bool   `json:"managed,omitempty"`
 }
 
 type rawHarvesterScholarly struct {
@@ -184,6 +191,7 @@ type rawHarvesterLimits struct {
 
 type rawHarvesterOutput struct {
 	MaxInlineChars *int `json:"maxInlineChars,omitempty"`
+	MaxResultBytes *int `json:"maxResultBytes,omitempty"`
 }
 
 // DefaultHarvester is the effective configuration when harvester.config.json
@@ -191,13 +199,13 @@ type rawHarvesterOutput struct {
 func DefaultHarvester() HarvesterConfig {
 	return HarvesterConfig{
 		External: HarvesterExternal{Host: "127.0.0.1", Port: DefaultHarvesterExternalPort},
-		Search:   HarvesterSearch{Enabled: true},
+		Search:   HarvesterSearch{Enabled: true, Managed: true},
 		Cache: HarvesterCache{
 			TTL:                  24 * time.Hour,
 			NegativeTTL:          120 * time.Second,
 			NegativeTransientTTL: 15 * time.Second,
 		},
-		Output: HarvesterOutput{MaxInlineChars: 50000},
+		Output: HarvesterOutput{MaxInlineChars: 50000, MaxResultBytes: 50000},
 	}
 }
 
@@ -286,6 +294,9 @@ func loadHarvester(result *Config, home string) error {
 		}
 		if search.BraveAPIKey != nil {
 			harvester.Search.BraveAPIKey = strings.TrimSpace(*search.BraveAPIKey)
+		}
+		if search.Managed != nil {
+			harvester.Search.Managed = *search.Managed
 		}
 	}
 	if scholarly := raw.Scholarly; scholarly != nil {
@@ -420,6 +431,16 @@ func loadHarvester(result *Config, home string) error {
 		}
 		harvester.Output.MaxInlineChars = *raw.Output.MaxInlineChars
 	}
+	if raw.Output != nil && raw.Output.MaxResultBytes != nil {
+		if *raw.Output.MaxResultBytes < 1 {
+			return fmt.Errorf(
+				"harvester config %s: output.maxResultBytes must be at least 1, got %d",
+				path,
+				*raw.Output.MaxResultBytes,
+			)
+		}
+		harvester.Output.MaxResultBytes = *raw.Output.MaxResultBytes
+	}
 	if raw.Harvest != nil {
 		for key, pair := range map[string]struct {
 			raw    *int64
@@ -525,6 +546,7 @@ func MarshalHarvester(harvester HarvesterConfig, redact bool) ([]byte, error) {
 		"search": map[string]any{
 			"enabled": harvester.Search.Enabled, "searxngURL": harvester.Search.SearXNGURL,
 			"braveApiKey": secret(harvester.Search.BraveAPIKey),
+			"managed":     harvester.Search.Managed,
 		},
 		"scholarly": map[string]any{
 			"contactEmail":          harvester.Scholarly.ContactEmail,
@@ -548,7 +570,9 @@ func MarshalHarvester(harvester HarvesterConfig, redact bool) ([]byte, error) {
 			"negativeTtlSeconds":          int(harvester.Cache.NegativeTTL / time.Second),
 			"negativeTransientTtlSeconds": int(harvester.Cache.NegativeTransientTTL / time.Second),
 		},
-		"output": map[string]any{"maxInlineChars": harvester.Output.MaxInlineChars},
+		"output": map[string]any{
+			"maxInlineChars": harvester.Output.MaxInlineChars, "maxResultBytes": harvester.Output.MaxResultBytes,
+		},
 		"harvest": map[string]any{
 			"maxDownloadBytes": harvester.Harvest.MaxDownloadBytes,
 			"maxResourceBytes": harvester.Harvest.MaxResourceBytes,

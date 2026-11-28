@@ -29,6 +29,8 @@ func TestHarvesterSchemaValidationAndSecretPermissions(t *testing.T) {
 		{`{"convert":{"workers":-1}}`, "convert.workers", 0600},
 		{`{"harvest":{"maxResourceBytes":-1}}`, "harvest.maxResourceBytes", 0600},
 		{`{"output":{"maxInlineChars":0}}`, "output.maxInlineChars", 0600},
+		{`{"output":{"maxResultBytes":0}}`, "output.maxResultBytes", 0600},
+		{`{"output":{"maxResultBytes":-5}}`, "output.maxResultBytes must be at least 1, got -5", 0600},
 		{`{"scholarly":{"mirrors":{"unknown":"https://example.test"}}}`, "unknown provider", 0600},
 		{`{"search":{"braveApiKey":"secret"}}`, "readable by others", 0644},
 	} {
@@ -89,5 +91,49 @@ func TestMarshalHarvesterPreservesSchemaAndRedacts(t *testing.T) {
 	}
 	if runtime.Config.Harvester.External.Passphrase != config.External.Passphrase || runtime.Config.Harvester.Cache.TTL != 0 || runtime.Config.Harvester.Convert.Timeout != config.Convert.Timeout {
 		t.Fatalf("roundtrip=%+v", runtime.Config.Harvester)
+	}
+}
+
+// TestHarvesterOutputMaxResultBytes: output.maxResultBytes defaults to 50000,
+// a config written before the key keeps the default beside its own
+// maxInlineChars, a set value loads as written from 1 up, and config show
+// names both output keys.
+func TestHarvesterOutputMaxResultBytes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(paths.EnvHome, home)
+	for _, tc := range []struct {
+		body              string
+		inline, maxResult int
+	}{
+		{`{}`, 50000, 50000},
+		{`{"output":{"maxInlineChars":40000}}`, 40000, 50000},
+		{`{"output":{"maxResultBytes":1}}`, 50000, 1},
+		{`{"output":{"maxResultBytes":500000}}`, 50000, 500000},
+	} {
+		path := filepath.Join(home, "config.json")
+		if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runtime, err := LoadRuntime(path)
+		if err != nil {
+			t.Fatalf("body=%s: %v", tc.body, err)
+		}
+		if got := runtime.Config.Harvester.Output; got.MaxInlineChars != tc.inline || got.MaxResultBytes != tc.maxResult {
+			t.Errorf("body=%s output = %+v, want maxInlineChars %d maxResultBytes %d", tc.body, got, tc.inline, tc.maxResult)
+		}
+	}
+	if got := DefaultHarvester().Output.MaxResultBytes; got != 50000 {
+		t.Errorf("default output.maxResultBytes = %d, want 50000", got)
+	}
+	shown, err := MarshalHarvester(DefaultHarvester(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value struct {
+		Output map[string]int `json:"output"`
+	}
+	if err := json.Unmarshal(shown, &value); err != nil ||
+		value.Output["maxInlineChars"] != 50000 || value.Output["maxResultBytes"] != 50000 {
+		t.Errorf("config show output = %v (%v), want both keys at 50000", value.Output, err)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/rezzminator/harvester/internal/clock"
 	"github.com/rezzminator/harvester/internal/paths"
@@ -173,9 +174,10 @@ func (c *Cache) save(
 	return path, nil
 }
 
-// InlineTruncationNote ends inline content truncateInline cut short; a
-// renderer that states the truncation itself cuts it off (strings.CutSuffix).
-const InlineTruncationNote = "\n\n[content truncated; read the cached path for the complete artifact]"
+// InlineTruncationNote ends inline content truncateInline or pageInline cut
+// short; a renderer that states the truncation itself cuts it off
+// (strings.CutSuffix).
+const InlineTruncationNote = "\n\n[content truncated; read it again with the offset where this part ends to continue, or read the cached path for the complete artifact]"
 
 func truncateInline(body string, limit int) string {
 	if limit <= 0 {
@@ -186,6 +188,22 @@ func truncateInline(body string, limit int) string {
 		return body
 	}
 	return string(runes[:limit]) + InlineTruncationNote
+}
+
+// pageInline is the inline content of a public result read at offset: the
+// item's content (body without its leading space, so its characters count
+// as Chars counts them) from its offset-th character, cut to limit
+// characters. offset is within the content (exportResult refuses one at or
+// past its end).
+func pageInline(body string, offset, limit int) string {
+	runes := []rune(strings.TrimLeftFunc(body, unicode.IsSpace))
+	if offset > 0 {
+		runes = runes[min(offset, len(runes)):]
+	}
+	if limit > 0 && len(runes) > limit {
+		return string(runes[:limit]) + InlineTruncationNote
+	}
+	return string(runes)
 }
 
 var volatileKinds = map[string]bool{

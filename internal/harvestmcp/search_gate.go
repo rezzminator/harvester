@@ -47,8 +47,8 @@ func serverInstructions(searchAvailable, remote bool) string {
 	text := strings.Join(routes, "; ") + "." +
 		` Answers are text, one "=== [n/N]" block per item: "No … found" is nothing found, an error is a failed lookup.`
 	if !searchAvailable {
-		text += " Web search is not configured on this server — set search.searxngURL or search.braveApiKey in " +
-			config.HarvesterFileName + " to enable web search."
+		text += " Web search is not configured on this server — run harvester setup with Docker running, or set " +
+			"search.searxngURL or search.braveApiKey in " + config.HarvesterFileName + ", to enable web search."
 	}
 	return text
 }

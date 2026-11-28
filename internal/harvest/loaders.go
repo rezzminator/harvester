@@ -24,9 +24,11 @@ import (
 // then renders the whole tree in thread order. It is deterministic (DOM order,
 // one request at a time, in one cookie session like a reader's), polite
 // (loaderPace between requests; a 429 is waited out and retried once within
-// loader_retry.go's caps, a second 429 or a bot wall ends the following) and
+// loader_retry.go's caps, a second 429 or a bot wall from the site ends the
+// following; another server's fails only its own request) and
 // bounded (loaderRequestCap per fetch, or the claiming
-// extractor's own loaderCap where that is higher).
+// extractor's own loaderCap where that is higher; a fetchBounded loader's
+// requests within loaderPacingBudget too).
 // Whatever is still unfollowed stays in the page, where the extractor counts
 // it as a gap, and the budget's note names why. A later conversion of the same
 // fetch (the next rung's page, the browser's render) gets every answer already
@@ -115,6 +117,20 @@ type pageLoader struct {
 	// quotaRate, when set, is the request quota the site states, named when
 	// the pacing budget ends the following (loader_quota.go).
 	quotaRate *siteQuota
+	// fetchBounded: the request counts toward loaderPacingBudget from the
+	// fetch's first such request on, its waits and answers together, and is
+	// cut off where the budget ends — a loader reaching servers whose answers
+	// may each take long (another Mastodon instance, a forum's later pages)
+	// stops within what an MCP client waits for a tool call.
+	fetchBounded bool
+	// pageRung: the request is another HTML page of the site (a topic's
+	// next page), sent on the client of the rung that delivered the page
+	// (loaderBudget.client) — a site refusing the direct client serves its
+	// pages to the Chrome impersonation. Unset, the request goes out on the
+	// direct client, its own Accept header intact: the Chrome surface sends
+	// a browser's Accept on every request, and an API asked for HTML answers
+	// with a page or a refusal.
+	pageRung bool
 }
 
 // loaderBudget is one fetch's loader following, shared by every conversion of
@@ -150,6 +166,12 @@ type loaderBudget struct {
 	failed map[string]bool
 	// jar carries the cookies the site sets across the fetch's requests.
 	jar http.CookieJar
+	// client and ua, when set, are the rung's that delivered the page being
+	// followed (a site refusing the direct client answers its Chrome
+	// impersonation), the client a pageRung loader goes out on; unset, every
+	// loader goes out on the direct client.
+	client *http.Client
+	ua     string
 	// loginGateOnly: a page of this fetch held nothing but a login gate (walls.go).
 	loginGateOnly bool
 	// stopped is why following ended before every loader was requested; ""
@@ -334,6 +356,10 @@ func (h *Harvester) followLoader(
 		budget.failed[loader.key] = true
 		return true
 	}
+	// elsewhere: a request to another server (a remote reply's own instance);
+	// its refusal, rate limit or wall fails that request alone and never ends
+	// the following of the site's own loaders.
+	elsewhere := extractor.requestsElsewhere(page, target)
 	if budget.requests >= budget.limit {
 		budget.stopped = fmt.Sprintf("the cap of %d loader requests per page was reached", budget.limit)
 		budget.policyStop = true
@@ -352,19 +378,31 @@ func (h *Harvester) followLoader(
 		return false
 	}
 	wait := max(budget.pace, budget.hold, quotaWait)
-	if loader.quotaHeaders && budget.quota != nil {
+	quotaPaced := loader.quotaHeaders && budget.quota != nil
+	// left is what the budget leaves the request's answer; 0 when the
+	// request is not budgeted.
+	var left time.Duration
+	if quotaPaced || loader.fetchBounded {
 		now := h.nowClock().Now()
 		if budget.pacedFrom.IsZero() {
 			budget.pacedFrom = now
 		}
-		if elapsed := now.Sub(budget.pacedFrom); elapsed+wait+budget.lastAnswer > loaderPacingBudget {
-			budget.stopped = fmt.Sprintf("the %s a fetch may spend following loaders paced by the site's request "+
-				"quota ran out after %d request(s) and %s of it; the next wait %s and answer about %s would pass it; "+
-				"not requested", waitSeconds(loaderPacingBudget), budget.requests, waitSeconds(elapsed),
-				waitSeconds(wait), waitSeconds(budget.lastAnswer))
+		elapsed := now.Sub(budget.pacedFrom)
+		left = loaderPacingBudget - elapsed - wait
+		if elapsed+wait+budget.lastAnswer > loaderPacingBudget || (loader.fetchBounded && left <= 0) {
+			paced := ""
+			if quotaPaced {
+				paced = " paced by the site's request quota"
+			}
+			budget.stopped = fmt.Sprintf("the %s a fetch may spend following loaders%s ran out after %d "+
+				"request(s) and %s of it; the next wait %s and answer about %s would pass it; not requested",
+				waitSeconds(loaderPacingBudget), paced, budget.requests, waitSeconds(elapsed), waitSeconds(wait),
+				waitSeconds(budget.lastAnswer))
 			budget.policyStop = true
-			budget.pacingStop = true
-			budget.quotaRate = loader.quotaRate
+			if quotaPaced {
+				budget.pacingStop = true
+				budget.quotaRate = loader.quotaRate
+			}
 			return false
 		}
 	}
@@ -385,6 +423,9 @@ func (h *Harvester) followLoader(
 		jar:     budget.jar,
 		method:  loader.method,
 	}
+	if loader.pageRung && budget.client != nil {
+		request.client, request.ua = budget.client, budget.ua
+	}
 	for key, value := range loader.headers {
 		request.headers.Set(key, value)
 	}
@@ -393,16 +434,22 @@ func (h *Harvester) followLoader(
 		request.body = []byte(loader.form.Encode())
 	}
 	asked := h.nowClock().Now()
-	response, rateStop, err := h.loaderAttempt(ctx, loader, request, budget)
+	attemptCtx := ctx
+	if loader.fetchBounded {
+		var cancel context.CancelFunc
+		attemptCtx, cancel = context.WithTimeout(ctx, left)
+		defer cancel()
+	}
+	response, rateStop, err := h.loaderAttempt(attemptCtx, loader, request, budget)
 	budget.lastAnswer = h.nowClock().Now().Sub(asked)
 	if err != nil {
-		return budget.fail(ctx, loader, err.Error(), errorReasonClass(err, "request failed"))
+		return budget.fail(ctx, loader, elsewhere, err.Error(), errorReasonClass(err, "request failed"))
 	}
 	if final, parseErr := url.Parse(response.finalURL); parseErr != nil || !extractor.mayRequest(page, final) {
 		// A redirect took the request off the site: its answer is not the
 		// site's, whatever it holds.
 		offSite := "answered from off the site (" + safeURL(response.finalURL) + ")"
-		return budget.fail(ctx, loader, offSite, offSite)
+		return budget.fail(ctx, loader, elsewhere, offSite, offSite)
 	}
 	if loader.backoff != nil {
 		budget.hold = loader.backoff(response.body)
@@ -413,6 +460,10 @@ func (h *Harvester) followLoader(
 		defer budget.stopAtQuota()
 	}
 	switch {
+	case elsewhere && (response.status == http.StatusTooManyRequests ||
+		(response.status >= 400 && loader.rateLimited != nil && loader.rateLimited(response.status, response.body))):
+		status := fmt.Sprintf("HTTP %d (rate limited)", response.status)
+		return budget.fail(ctx, loader, elsewhere, status, status)
 	case response.status == http.StatusTooManyRequests:
 		budget.stopped = rateStop
 		budget.policyStop = true
@@ -427,24 +478,26 @@ func (h *Harvester) followLoader(
 		return false
 	case response.status >= 400:
 		status := fmt.Sprintf("HTTP %d", response.status)
-		return budget.fail(ctx, loader, status, status)
+		return budget.fail(ctx, loader, elsewhere, status, status)
 	}
 	if err := loader.graft(response.body, response.contentType); err != nil {
 		// The graft's own error names what the site's page held (its title,
 		// its content type) — content already public on the wire, never a
 		// local path or a worker's stderr, so it passes through unclassified.
-		if isChallenge(response.body, response.status) {
+		if !elsewhere && isChallenge(response.body, response.status) {
 			// Judged only on an answer that held nothing to graft: a comment
 			// can quote a wall's phrase.
-			budget.fail(ctx, loader, err.Error(), graftErrorClass(err))
+			budget.fail(ctx, loader, elsewhere, err.Error(), graftErrorClass(err))
 			budget.stopped = fmt.Sprintf("the site answered a bot wall after %d request(s); not retried",
 				budget.requests)
 			return false
 		}
-		return budget.fail(ctx, loader, err.Error(), graftErrorClass(err))
+		return budget.fail(ctx, loader, elsewhere, err.Error(), graftErrorClass(err))
 	}
 	budget.followed[loader.key] = true
-	budget.consecutive = 0
+	if !elsewhere {
+		budget.consecutive = 0
+	}
 	if budget.replayBytes+len(response.body) > budget.replayLimit {
 		obs.Logger(ctx).Warn("harvest: a followed loader's answer is past the replay bound; a later conversion "+
 			"names it a gap", "kind", loader.label, "target", safeURL(loader.target),
@@ -457,16 +510,19 @@ func (h *Harvester) followLoader(
 }
 
 // fail records one failed loader request; false once loaderFailureStop
-// requests in a row have failed. detail is the full diagnostic that reaches
+// requests in a row to the site have failed (a request elsewhere is not
+// counted: another server refusing says nothing of the site). detail is the full diagnostic that reaches
 // the log (obs); class is the short, sanitized reason a partial artifact and
 // the public result may repeat — errorReasonClass's output for an error the
 // caller does not already know to be safe, detail itself otherwise.
-func (budget *loaderBudget) fail(ctx context.Context, loader pageLoader, detail, class string) bool {
+func (budget *loaderBudget) fail(ctx context.Context, loader pageLoader, elsewhere bool, detail, class string) bool {
 	obs.Logger(ctx).Warn("harvest: loader request failed",
 		"kind", loader.label, "target", safeURL(loader.target), obs.FieldErr, detail)
 	budget.failed[loader.key] = true
 	budget.failures = append(budget.failures, fmt.Sprintf("%s (%s): %s", loader.label, safeURL(loader.target), class))
-	budget.consecutive++
+	if !elsewhere {
+		budget.consecutive++
+	}
 	if ctx.Err() != nil {
 		budget.stopped = "the fetch was cancelled: " + errorReasonClass(ctx.Err(), "cancelled")
 		return false

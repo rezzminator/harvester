@@ -158,6 +158,66 @@ func TestVersionAndConfigPathDoNotRequireValidConfiguration(t *testing.T) {
 	}
 }
 
+// TestConfigShowNamesTheSearchBackendInEffect: stdout stays the config file's JSON shape, and stderr
+// names the backend in effect: the operator's URL over a ready managed record, the record when no
+// operator backend is set, none with its reason otherwise.
+func TestConfigShowNamesTheSearchBackendInEffect(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(paths.EnvHome, home)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	path := filepath.Join(home, "harvester.config.json")
+	t.Setenv("HARVESTER_CONFIG", path)
+	recordPath := filepath.Join(home, "state", "harvester", "search", "managed.json")
+	for _, tc := range []struct {
+		name, config, record, want string
+		managed                    bool
+	}{
+		{name: "no record", config: `{}`, managed: true,
+			want: "harvester config: search backend in effect: none (no managed backend yet)\n"},
+		{name: "ready managed record", config: `{}`, managed: true,
+			record: `{"url":"http://127.0.0.1:8888","container":"harvester-searxng","ready":true}`,
+			want:   "harvester config: search backend in effect: managed SearXNG http://127.0.0.1:8888 (container harvester-searxng)\n"},
+		{name: "operator URL wins", config: `{"search":{"searxngURL":"http://searx.internal:8080"}}`, managed: true,
+			record: `{"url":"http://127.0.0.1:8888","container":"harvester-searxng","ready":true}`,
+			want:   "harvester config: search backend in effect: search.searxngURL http://searx.internal:8080\n"},
+		{name: "managed off", config: `{"search":{"managed":false}}`,
+			record: `{"url":"http://127.0.0.1:8888","container":"harvester-searxng","ready":true}`,
+			want:   "harvester config: search backend in effect: none (search.managed is false)\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(tc.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.RemoveAll(filepath.Dir(recordPath)); err != nil {
+				t.Fatal(err)
+			}
+			if tc.record != "" {
+				if err := os.MkdirAll(filepath.Dir(recordPath), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(recordPath, []byte(tc.record), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var stdout, stderr bytes.Buffer
+			if code := run(context.Background(), []string{"config", "show"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+				t.Fatalf("code=%d stderr=%s", code, stderr.String())
+			}
+			var shown struct {
+				Search struct {
+					Managed bool `json:"managed"`
+				} `json:"search"`
+			}
+			if err := json.Unmarshal(stdout.Bytes(), &shown); err != nil || shown.Search.Managed != tc.managed {
+				t.Fatalf("stdout is not the config shape (err=%v managed=%t): %s", err, shown.Search.Managed, stdout.String())
+			}
+			if stderr.String() != tc.want {
+				t.Fatalf("stderr = %q, want %q", stderr.String(), tc.want)
+			}
+		})
+	}
+}
+
 func TestHarvestAskE2E(t *testing.T) {
 	home := t.TempDir()
 	source := filepath.Join(home, "source.txt")
